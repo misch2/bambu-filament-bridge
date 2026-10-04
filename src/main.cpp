@@ -34,6 +34,13 @@ namespace {
 
 std::atomic<bool> g_stop{false};
 
+long long steady_ms()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()
+    ).count();
+}
+
 void on_signal(int)
 {
     g_stop = true;
@@ -836,6 +843,11 @@ try {
     std::atomic<bool>
         mqtt_connected{false};
 
+std::atomic<long long>
+    last_local_message_ms{0};
+
+std::atomic<bool> reconnecting{false};
+
     std::atomic<bool>
         ready{false};
 
@@ -845,14 +857,16 @@ try {
         sequence{20000};
 
     ex.set_on_local_message_fn(
-        agent,
-        [&tracker](
-            std::string,
-            std::string msg)
-        {
-            tracker.handle_message(
-                msg);
-        });
+    agent,
+    [&tracker, &last_local_message_ms](
+        std::string,
+        std::string msg)
+    {
+        last_local_message_ms = steady_ms();
+
+        tracker.handle_message(
+            msg);
+    });
 
     ex.set_on_message_fn(
         agent,
@@ -1046,32 +1060,90 @@ try {
             "change_user failed");
     }
 
-    std::cout
-        << "[state] CONNECTING"
-        << std::endl;
 
-    BBL::detectResult detect{};
+BBL::detectResult initial_detect{};
+
+auto bring_up_printer =
+    [&](bool is_reconnect) -> bool
+{
+    /*
+     * Serialise reconnect against filament commands.
+     * A POST that already owns command_mutex finishes first.
+     */
+    std::unique_lock<std::mutex>
+        command_lock(command_mutex);
+
+    reconnecting = true;
+    ready = false;
+    mqtt_connected = false;
+
+    connected.reset();
+    cert_installed.reset();
+
+    auto fail =
+        [&](const std::string& message) -> bool
+    {
+        std::cout
+            << "[connection] "
+            << message
+            << std::endl;
+
+        ready = false;
+        mqtt_connected = false;
+        reconnecting = false;
+
+        return false;
+    };
+
+    if (is_reconnect) {
+        std::cout
+            << "[state] RECONNECTING"
+            << std::endl;
+
+        /*
+         * Dispose of the stale MQTT session kept by the
+         * stock plugin.
+         */
+        ex.disconnect_printer(agent);
+
+        std::this_thread::sleep_for(
+            500ms);
+    }
+    else {
+        std::cout
+            << "[state] CONNECTING"
+            << std::endl;
+    }
+
+    /*
+     * bind_detect must precede connect_printer.
+     */
+    BBL::detectResult current_detect{};
 
     const int detect_rc =
         ex.bind_detect(
             agent,
             dev_ip,
             "secure",
-            detect);
+            current_detect);
 
-    if (detect_rc != 0)
-        throw std::runtime_error(
-            "bind_detect failed: " +
-            std::to_string(
-                detect_rc));
+    if (detect_rc != 0) {
+        return fail(
+            "bind_detect failed rc=" +
+            std::to_string(detect_rc));
+    }
+
+    if (!is_reconnect)
+        initial_detect =
+            current_detect;
 
     std::cout
         << "[bridge] detected "
-        << detect.dev_name
+        << current_detect.dev_name
         << " model="
-        << detect.model_id
+        << current_detect.model_id
         << " firmware="
-        << detect.version
+        << current_detect.version
         << std::endl;
 
     const int connect_rc =
@@ -1083,67 +1155,125 @@ try {
             access_code,
             true);
 
-    if (connect_rc != 0)
-        throw std::runtime_error(
-            "connect_printer failed: " +
-            std::to_string(
-                connect_rc));
+    if (connect_rc != 0) {
+        return fail(
+            "connect_printer failed rc=" +
+            std::to_string(connect_rc));
+    }
 
-    if (!connected.wait_for(
-            15s))
-    {
-        throw std::runtime_error(
-            "Timed out waiting for "
-            "LAN MQTT connection");
+    if (!connected.wait_for(15s)) {
+        ex.disconnect_printer(agent);
+
+        return fail(
+            "LAN MQTT connection timeout");
     }
 
     ex.start_subscribe(
         agent,
         "app");
 
-    const std::string startup_pushall =
-        R"({"pushing":{"sequence_id":"0","command":"pushall","version":1,"push_target":1}})";
-
-    const std::string get_version =
-        R"({"info":{"sequence_id":"1","command":"get_version"}})";
-
-    const std::string get_access_code =
-        R"({"system":{"sequence_id":"2","command":"get_access_code"}})";
-
-    if (
-        ex.send_message_to_printer(
-            agent,
-            dev_id,
-            startup_pushall,
-            1,
-            0) != 0)
+    auto send_json =
+        [&](const json& payload)
     {
-        throw std::runtime_error(
-            "pushall failed");
+        return
+            ex.send_message_to_printer(
+                agent,
+                dev_id,
+                payload.dump(),
+                1,
+                0);
+    };
+
+    /*
+     * Studio-like initial state requests.
+     */
+    const std::string push_sequence =
+        std::to_string(++sequence);
+
+    json pushall = {
+        {
+            "pushing",
+            {
+                {
+                    "sequence_id",
+                    push_sequence
+                },
+                {
+                    "command",
+                    "pushall"
+                },
+                {
+                    "version",
+                    1
+                },
+                {
+                    "push_target",
+                    1
+                }
+            }
+        }
+    };
+
+    if (send_json(pushall) != 0) {
+        ex.disconnect_printer(agent);
+
+        return fail(
+            "initial pushall failed");
     }
 
-    ex.send_message_to_printer(
-        agent,
-        dev_id,
-        get_version,
-        1,
-        0);
+    json get_version = {
+        {
+            "info",
+            {
+                {
+                    "sequence_id",
+                    std::to_string(++sequence)
+                },
+                {
+                    "command",
+                    "get_version"
+                }
+            }
+        }
+    };
 
-    ex.send_message_to_printer(
-        agent,
-        dev_id,
-        get_access_code,
-        1,
-        0);
+    send_json(
+        get_version);
 
+    json get_access_code = {
+        {
+            "system",
+            {
+                {
+                    "sequence_id",
+                    std::to_string(++sequence)
+                },
+                {
+                    "command",
+                    "get_access_code"
+                }
+            }
+        }
+    };
+
+    send_json(
+        get_access_code);
+
+    /*
+     * Every new printer session needs provisioning,
+     * because the printer-side trust state is volatile.
+     */
     std::cout
         << "[state] PROVISIONING"
         << std::endl;
 
-    if (!ex.install_device_cert)
-        throw std::runtime_error(
-            "Plugin does not export "
+    if (!ex.install_device_cert) {
+        ex.disconnect_printer(agent);
+
+        return fail(
+            "plugin does not export "
             "install_device_cert");
+    }
 
     cert_installed.reset();
 
@@ -1160,19 +1290,167 @@ try {
         dev_id,
         false);
 
-    if (!cert_installed.wait_for(
-            10s))
-    {
-        throw std::runtime_error(
-            "Timed out waiting for "
-            "device_cert_installed");
+    if (!cert_installed.wait_for(10s)) {
+        ex.disconnect_printer(agent);
+
+        return fail(
+            "device_cert_installed timeout");
     }
 
+    /*
+     * Require fresh telemetry after provisioning.
+     * This ensures we don't declare READY just because
+     * connect_printer() returned successfully.
+     */
+    const long long previous_message =
+        last_local_message_ms.load();
+
+    json final_pushall = {
+        {
+            "pushing",
+            {
+                {
+                    "sequence_id",
+                    std::to_string(++sequence)
+                },
+                {
+                    "command",
+                    "pushall"
+                },
+                {
+                    "version",
+                    1
+                },
+                {
+                    "push_target",
+                    1
+                }
+            }
+        }
+    };
+
+    if (send_json(
+            final_pushall) != 0)
+    {
+        ex.disconnect_printer(agent);
+
+        return fail(
+            "post-provision pushall failed");
+    }
+
+    bool fresh_telemetry = false;
+
+    for (int i = 0;
+         i < 30;
+         ++i)
+    {
+        if (
+            last_local_message_ms.load() >
+            previous_message)
+        {
+            fresh_telemetry = true;
+            break;
+        }
+
+        std::this_thread::sleep_for(
+            100ms);
+    }
+
+    if (!fresh_telemetry) {
+        ex.disconnect_printer(agent);
+
+        return fail(
+            "no fresh telemetry after reconnect");
+    }
+
+    mqtt_connected = true;
     ready = true;
+    reconnecting = false;
 
     std::cout
         << "[state] READY"
+        << (is_reconnect
+            ? " after reconnect"
+            : "")
         << std::endl;
+
+    return true;
+};
+
+if (!bring_up_printer(false)) {
+    throw std::runtime_error(
+        "Initial printer connection failed");
+}
+
+std::thread connection_refresher(
+    [&]() {
+        long long last_reconnect_attempt = 0;
+
+        while (!g_stop) {
+            if (ready.load()) {
+                /*
+                 * Mirror Studio's periodic refresh while
+                 * the session appears healthy.
+                 */
+                if (ex.refresh_connection) {
+                    const int rc =
+                        ex.refresh_connection(
+                            agent);
+
+                    if (rc != 0) {
+                        std::cout
+                            << "[connection] "
+                            << "refresh_connection rc="
+                            << rc
+                            << std::endl;
+                    }
+                }
+
+                const long long last =
+                    last_local_message_ms.load();
+
+                if (last > 0) {
+                    const long long age =
+                        steady_ms() - last;
+
+                    if (age > 6000) {
+                        if (ready.exchange(false)) {
+                            mqtt_connected = false;
+
+                            std::cout
+                                << "[state] STALE: "
+                                << "no printer telemetry for "
+                                << age
+                                << " ms"
+                                << std::endl;
+                        }
+                    }
+                }
+            }
+            else if (!reconnecting.load()) {
+                const long long now =
+                    steady_ms();
+
+                if (
+                    now -
+                        last_reconnect_attempt >=
+                    5000)
+                {
+                    /*
+                     * Printer may simply still be booting.
+                     * Failure is fine; retry again in 5 s.
+                     */
+                    bring_up_printer(true);
+
+                    last_reconnect_attempt =
+                        steady_ms();
+                }
+            }
+
+            std::this_thread::sleep_for(
+                1s);
+        }
+    });
 
     /* -----------------------------------------------------
      * HTTP listener
@@ -1349,8 +1627,18 @@ try {
                         },
                         {
                             "firmware",
-                            detect.version
-                        }
+                            initial_detect.version
+                        },
+			{
+    "lastMessageAgeMs",
+    last_local_message_ms.load() > 0
+        ? steady_ms() - last_local_message_ms.load()
+        : -1
+},
+	{
+    "reconnecting",
+    reconnecting.load()
+},
                     });
         }
         else if (
@@ -1568,6 +1856,14 @@ try {
 
                         if (send_rc != 0) {
                             tracker.cancel();
+
+    ready = false;
+    mqtt_connected = false;
+
+    std::cout
+        << "[state] NOT READY: send failed rc="
+        << send_rc
+        << std::endl;
 
                             response =
                                 json_response(
