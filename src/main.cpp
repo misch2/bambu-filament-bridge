@@ -1,7 +1,16 @@
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <csignal>
+#include <cctype>
+#include <cerrno>
+#include <cstring>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -11,7 +20,6 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <thread>
 
 #include <nlohmann/json.hpp>
 
@@ -50,6 +58,56 @@ std::string env_or(
     return (value && *value)
         ? value
         : fallback;
+}
+
+std::string lower(std::string value)
+{
+    for (char& c : value)
+        c = static_cast<char>(
+            std::tolower(
+                static_cast<unsigned char>(c)));
+
+    return value;
+}
+
+std::string trim(const std::string& value)
+{
+    const auto first =
+        value.find_first_not_of(" \t\r\n");
+
+    if (first == std::string::npos)
+        return "";
+
+    const auto last =
+        value.find_last_not_of(" \t\r\n");
+
+    return value.substr(
+        first,
+        last - first + 1);
+}
+
+std::string uppercase(std::string value)
+{
+    for (char& c : value)
+        c = static_cast<char>(
+            std::toupper(
+                static_cast<unsigned char>(c)));
+
+    return value;
+}
+
+bool valid_color(const std::string& color)
+{
+    if (color.size() != 8)
+        return false;
+
+    for (char c : color) {
+        if (!std::isxdigit(
+                static_cast<unsigned char>(c)))
+            return false;
+    }
+
+    return true;
 }
 
 class SignalLatch {
@@ -106,11 +164,19 @@ struct FilamentRequest {
 
     bool reply_received = false;
     bool reply_success = false;
+    std::string reply_result;
+
+    bool verify_push = false;
+    unsigned long long verify_after_counter = 0;
 
     bool push_received = false;
     bool push_matches = false;
 
-    std::string reply_result;
+    std::string observed_profile;
+    std::string observed_type;
+    std::string observed_color;
+    std::string observed_temp_min;
+    std::string observed_temp_max;
 };
 
 class FilamentTracker {
@@ -124,49 +190,65 @@ public:
 
         request_.reply_received = false;
         request_.reply_success = false;
+        request_.reply_result.clear();
+
+        request_.verify_push = false;
         request_.push_received = false;
         request_.push_matches = false;
-        request_.reply_result.clear();
+
+        push_counter_ = 0;
     }
 
     void cancel()
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        request_.active = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            request_.active = false;
+        }
+
         cv_.notify_all();
+    }
+
+    void prepare_push_verification()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        request_.verify_push = true;
+        request_.verify_after_counter =
+            push_counter_;
+
+        request_.push_received = false;
+        request_.push_matches = false;
     }
 
     void handle_message(const std::string& msg)
     {
-        json root = json::parse(
-            msg,
-            nullptr,
-            false);
+        json root =
+            json::parse(
+                msg,
+                nullptr,
+                false);
 
         if (root.is_discarded() ||
             !root.contains("print") ||
             !root["print"].is_object())
             return;
 
-        std::unique_lock<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> lock(mutex_);
 
         if (!request_.active)
             return;
 
-        const json& print = root["print"];
+        const json& print =
+            root["print"];
 
         handle_reply(print);
         handle_push_status(print);
 
-        if (
-            request_.reply_received &&
-            request_.push_received)
-        {
-            cv_.notify_all();
-        }
+        cv_.notify_all();
     }
 
-    bool wait_for_complete(
+    bool wait_for_reply(
         std::chrono::milliseconds timeout,
         FilamentRequest& result)
     {
@@ -178,42 +260,63 @@ public:
             [&] {
                 return
                     !request_.active ||
-                    (
-                        request_.reply_received &&
-                        request_.push_received
-                    );
+                    request_.reply_received;
+            });
+
+        result = request_;
+
+        return
+            result.reply_received &&
+            result.reply_success;
+    }
+
+    bool wait_for_verified_push(
+        std::chrono::milliseconds timeout,
+        FilamentRequest& result)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+
+        cv_.wait_for(
+            lock,
+            timeout,
+            [&] {
+                return
+                    !request_.active ||
+                    request_.push_matches;
             });
 
         result = request_;
 
         request_.active = false;
 
-        return
-            result.reply_received &&
-            result.reply_success &&
-            result.push_received &&
-            result.push_matches;
+        return result.push_matches;
     }
 
 private:
     void handle_reply(const json& print)
     {
-        if (print.value("command", "") !=
+        if (print.value(
+                "command",
+                "") !=
             "ams_filament_setting")
             return;
 
-        if (
-            print.value("sequence_id", "") !=
+        if (print.value(
+                "sequence_id",
+                "") !=
             request_.sequence_id)
             return;
 
         request_.reply_received = true;
 
         request_.reply_result =
-            print.value("result", "");
+            print.value(
+                "result",
+                "");
 
         request_.reply_success =
-            request_.reply_result == "success";
+            request_.reply_result ==
+            "success";
 
         std::cout
             << "[command] printer reply: "
@@ -238,9 +341,11 @@ private:
             if (!ams.is_object())
                 continue;
 
-            if (
-                ams.value("id", "") !=
-                std::to_string(request_.ams_id))
+            if (ams.value(
+                    "id",
+                    "") !=
+                std::to_string(
+                    request_.ams_id))
                 continue;
 
             if (!ams.contains("tray") ||
@@ -251,49 +356,60 @@ private:
                 if (!tray.is_object())
                     continue;
 
-                if (
-                    tray.value("id", "") !=
-                    std::to_string(request_.tray_id))
+                if (tray.value(
+                        "id",
+                        "") !=
+                    std::to_string(
+                        request_.tray_id))
                     continue;
 
-                const std::string info_idx =
+                ++push_counter_;
+
+                request_.observed_profile =
                     tray.value(
                         "tray_info_idx",
                         "");
 
-                const std::string type =
+                request_.observed_type =
                     tray.value(
                         "tray_type",
                         "");
 
-                const std::string color =
+                request_.observed_color =
                     tray.value(
                         "tray_color",
                         "");
 
-                const std::string temp_min =
+                request_.observed_temp_min =
                     tray.value(
                         "nozzle_temp_min",
                         "");
 
-                const std::string temp_max =
+                request_.observed_temp_max =
                     tray.value(
                         "nozzle_temp_max",
                         "");
 
+                if (!request_.verify_push)
+                    return;
+
+                if (push_counter_ <=
+                    request_.verify_after_counter)
+                    return;
+
                 request_.push_received = true;
 
                 request_.push_matches =
-                    info_idx ==
+                    request_.observed_profile ==
                         request_.tray_info_idx &&
-                    type ==
+                    request_.observed_type ==
                         request_.tray_type &&
-                    color ==
+                    request_.observed_color ==
                         request_.tray_color &&
-                    temp_min ==
+                    request_.observed_temp_min ==
                         std::to_string(
                             request_.nozzle_temp_min) &&
-                    temp_max ==
+                    request_.observed_temp_max ==
                         std::to_string(
                             request_.nozzle_temp_max);
 
@@ -310,7 +426,10 @@ private:
 
     std::mutex mutex_;
     std::condition_variable cv_;
+
     FilamentRequest request_;
+
+    unsigned long long push_counter_ = 0;
 };
 
 void ensure_config(
@@ -320,7 +439,8 @@ void ensure_config(
         data_dir);
 
     const std::string filename =
-        data_dir + "/BambuStudio.conf";
+        data_dir +
+        "/BambuStudio.conf";
 
     if (std::filesystem::exists(filename))
         return;
@@ -329,7 +449,8 @@ void ensure_config(
 
     if (!out)
         throw std::runtime_error(
-            "Cannot create " + filename);
+            "Cannot create " +
+            filename);
 
     out <<
 R"({
@@ -342,21 +463,311 @@ R"({
 )";
 }
 
+/* ---------------------------------------------------------
+ * Minimal HTTP server
+ * --------------------------------------------------------- */
+
+struct HttpRequest {
+    std::string method;
+    std::string path;
+    std::map<std::string, std::string> headers;
+    std::string body;
+};
+
+struct HttpResponse {
+    int status = 200;
+    std::string reason = "OK";
+    std::string body;
+};
+
+bool send_all(
+    int fd,
+    const std::string& data)
+{
+    size_t sent = 0;
+
+    while (sent < data.size()) {
+        const ssize_t rc =
+            ::send(
+                fd,
+                data.data() + sent,
+                data.size() - sent,
+                MSG_NOSIGNAL);
+
+        if (rc <= 0)
+            return false;
+
+        sent += static_cast<size_t>(rc);
+    }
+
+    return true;
+}
+
+bool read_http_request(
+    int fd,
+    HttpRequest& request,
+    std::string& error)
+{
+    constexpr size_t MAX_REQUEST =
+        64 * 1024;
+
+    std::string data;
+
+    char buffer[4096];
+
+    size_t header_end =
+        std::string::npos;
+
+    while (
+        (header_end =
+            data.find("\r\n\r\n")) ==
+        std::string::npos)
+    {
+        const ssize_t rc =
+            ::recv(
+                fd,
+                buffer,
+                sizeof(buffer),
+                0);
+
+        if (rc <= 0) {
+            error =
+                "connection closed while reading headers";
+            return false;
+        }
+
+        data.append(
+            buffer,
+            static_cast<size_t>(rc));
+
+        if (data.size() >
+            MAX_REQUEST)
+        {
+            error =
+                "request too large";
+            return false;
+        }
+    }
+
+    const std::string header_text =
+        data.substr(
+            0,
+            header_end);
+
+    std::istringstream input(
+        header_text);
+
+    std::string request_line;
+
+    if (!std::getline(
+            input,
+            request_line))
+    {
+        error =
+            "missing request line";
+        return false;
+    }
+
+    if (!request_line.empty() &&
+        request_line.back() == '\r')
+        request_line.pop_back();
+
+    {
+        std::istringstream line(
+            request_line);
+
+        std::string version;
+
+        line
+            >> request.method
+            >> request.path
+            >> version;
+
+        if (!line ||
+            version.rfind(
+                "HTTP/",
+                0) != 0)
+        {
+            error =
+                "invalid request line";
+            return false;
+        }
+    }
+
+    std::string line;
+
+    while (std::getline(
+        input,
+        line))
+    {
+        if (!line.empty() &&
+            line.back() == '\r')
+            line.pop_back();
+
+        const auto colon =
+            line.find(':');
+
+        if (colon ==
+            std::string::npos)
+            continue;
+
+        std::string key =
+            lower(
+                trim(
+                    line.substr(
+                        0,
+                        colon)));
+
+        std::string value =
+            trim(
+                line.substr(
+                    colon + 1));
+
+        request.headers[key] =
+            value;
+    }
+
+    size_t content_length = 0;
+
+    const auto it =
+        request.headers.find(
+            "content-length");
+
+    if (it !=
+        request.headers.end())
+    {
+        try {
+            content_length =
+                static_cast<size_t>(
+                    std::stoul(
+                        it->second));
+        }
+        catch (...) {
+            error =
+                "invalid Content-Length";
+            return false;
+        }
+    }
+
+    if (content_length >
+        MAX_REQUEST)
+    {
+        error =
+            "request body too large";
+        return false;
+    }
+
+    const size_t body_start =
+        header_end + 4;
+
+    if (data.size() >
+        body_start)
+    {
+        request.body =
+            data.substr(
+                body_start);
+    }
+
+    while (
+        request.body.size() <
+        content_length)
+    {
+        const ssize_t rc =
+            ::recv(
+                fd,
+                buffer,
+                sizeof(buffer),
+                0);
+
+        if (rc <= 0) {
+            error =
+                "connection closed while reading body";
+            return false;
+        }
+
+        request.body.append(
+            buffer,
+            static_cast<size_t>(rc));
+
+        if (request.body.size() >
+            MAX_REQUEST)
+        {
+            error =
+                "request body too large";
+            return false;
+        }
+    }
+
+    if (request.body.size() >
+        content_length)
+    {
+        request.body.resize(
+            content_length);
+    }
+
+    return true;
+}
+
+void send_http_response(
+    int fd,
+    const HttpResponse& response)
+{
+    std::ostringstream out;
+
+    out
+        << "HTTP/1.1 "
+        << response.status
+        << " "
+        << response.reason
+        << "\r\n"
+        << "Content-Type: application/json\r\n"
+        << "Content-Length: "
+        << response.body.size()
+        << "\r\n"
+        << "Connection: close\r\n"
+        << "\r\n"
+        << response.body;
+
+    send_all(
+        fd,
+        out.str());
+}
+
+HttpResponse json_response(
+    int status,
+    const std::string& reason,
+    const json& body)
+{
+    return {
+        status,
+        reason,
+        body.dump()
+    };
+}
+
 } // namespace
 
 int main()
 try {
-    std::signal(SIGINT, on_signal);
-    std::signal(SIGTERM, on_signal);
+    std::signal(
+        SIGINT,
+        on_signal);
+
+    std::signal(
+        SIGTERM,
+        on_signal);
 
     const std::string dev_id =
-        env_required("BAMBU_DEV_ID");
+        env_required(
+            "BAMBU_DEV_ID");
 
     const std::string dev_ip =
-        env_required("BAMBU_DEV_IP");
+        env_required(
+            "BAMBU_DEV_IP");
 
     const std::string access_code =
-        env_required("BAMBU_ACCESS_CODE");
+        env_required(
+            "BAMBU_ACCESS_CODE");
 
     const std::string plugin_path =
         env_or(
@@ -377,7 +788,19 @@ try {
             "/home/runner/.local/share/"
             "bambu-bridge");
 
-    ensure_config(data_dir);
+    const std::string http_bind =
+        env_or(
+            "BAMBU_HTTP_BIND",
+            "0.0.0.0");
+
+    const int http_port =
+        std::stoi(
+            env_or(
+                "BAMBU_HTTP_PORT",
+                "8080"));
+
+    ensure_config(
+        data_dir);
 
     std::cout
         << "[bridge] loading plugin: "
@@ -385,15 +808,20 @@ try {
         << std::endl;
 
     pr::PluginExports ex =
-        pr::load(plugin_path);
+        pr::load(
+            plugin_path);
+
+    const std::string plugin_version =
+        ex.version;
 
     std::cout
         << "[bridge] plugin version: "
-        << ex.version
+        << plugin_version
         << std::endl;
 
     void* agent =
-        ex.create_agent(data_dir);
+        ex.create_agent(
+            data_dir);
 
     if (!agent)
         throw std::runtime_error(
@@ -402,22 +830,26 @@ try {
     SignalLatch connected;
     SignalLatch cert_installed;
 
-    FilamentTracker filament_tracker;
+    FilamentTracker tracker;
 
-    std::atomic<bool> mqtt_connected{
-        false};
+    std::atomic<bool>
+        mqtt_connected{false};
 
-    /*
-     * Keep local_message silent except for messages
-     * relevant to a pending filament command.
-     */
+    std::atomic<bool>
+        ready{false};
+
+    std::mutex command_mutex;
+
+    std::atomic<unsigned long long>
+        sequence{20000};
+
     ex.set_on_local_message_fn(
         agent,
-        [&filament_tracker](
+        [&tracker](
             std::string,
             std::string msg)
         {
-            filament_tracker.handle_message(
+            tracker.handle_message(
                 msg);
         });
 
@@ -449,7 +881,8 @@ try {
         agent,
         [
             &connected,
-            &mqtt_connected
+            &mqtt_connected,
+            &ready
         ](
             int status,
             std::string dev_id_cb,
@@ -468,26 +901,15 @@ try {
 
                 connected.signal();
             }
-            else if (
-                status ==
-                BBL::ConnectStatusLost)
-            {
+            else {
                 mqtt_connected = false;
+                ready = false;
 
                 std::cout
                     << "[state] DISCONNECTED: "
                     << dev_id_cb
-                    << " (" << msg << ")"
-                    << std::endl;
-            }
-            else {
-                mqtt_connected = false;
-
-                std::cout
-                    << "[state] connection status="
+                    << " status="
                     << status
-                    << " dev="
-                    << dev_id_cb
                     << " msg="
                     << msg
                     << std::endl;
@@ -509,7 +931,7 @@ try {
             std::string body)
         {
             std::cerr
-                << "[http] error "
+                << "[http] plugin error "
                 << status
                 << ": "
                 << body
@@ -529,7 +951,8 @@ try {
     ex.set_get_country_code_fn(
         agent,
         [] {
-            return std::string("CZ");
+            return std::string(
+                "CZ");
         });
 
     if (ex.set_queue_on_main_fn) {
@@ -551,14 +974,12 @@ try {
         agent,
         [](std::string) {});
 
-    /*
-     * Same init order as Bambu Studio.
-     */
     ex.set_config_dir(
         agent,
         data_dir);
 
-    ex.init_log(agent);
+    ex.init_log(
+        agent);
 
     ex.set_cert_file(
         agent,
@@ -603,13 +1024,9 @@ try {
         agent,
         "CZ");
 
-    const int start_rc =
-        ex.start(agent);
-
-    if (start_rc != 0)
+    if (ex.start(agent) != 0)
         throw std::runtime_error(
-            "bambu_network_start failed: " +
-            std::to_string(start_rc));
+            "bambu_network_start failed");
 
     ex.enable_multi_machine(
         agent,
@@ -620,13 +1037,13 @@ try {
         true,
         false);
 
-    const int user_rc =
-        ex.change_user(agent, "");
-
-    if (user_rc != 0)
+    if (ex.change_user(
+            agent,
+            "") != 0)
+    {
         throw std::runtime_error(
-            "change_user failed: " +
-            std::to_string(user_rc));
+            "change_user failed");
+    }
 
     std::cout
         << "[state] CONNECTING"
@@ -644,7 +1061,8 @@ try {
     if (detect_rc != 0)
         throw std::runtime_error(
             "bind_detect failed: " +
-            std::to_string(detect_rc));
+            std::to_string(
+                detect_rc));
 
     std::cout
         << "[bridge] detected "
@@ -667,18 +1085,22 @@ try {
     if (connect_rc != 0)
         throw std::runtime_error(
             "connect_printer failed: " +
-            std::to_string(connect_rc));
+            std::to_string(
+                connect_rc));
 
-    if (!connected.wait_for(15s))
+    if (!connected.wait_for(
+            15s))
+    {
         throw std::runtime_error(
             "Timed out waiting for "
             "LAN MQTT connection");
+    }
 
     ex.start_subscribe(
         agent,
         "app");
 
-    const std::string pushall =
+    const std::string startup_pushall =
         R"({"pushing":{"sequence_id":"0","command":"pushall","version":1,"push_target":1}})";
 
     const std::string get_version =
@@ -691,7 +1113,7 @@ try {
         ex.send_message_to_printer(
             agent,
             dev_id,
-            pushall,
+            startup_pushall,
             1,
             0) != 0)
     {
@@ -729,220 +1151,708 @@ try {
         dev_id,
         true);
 
-    std::this_thread::sleep_for(5s);
+    std::this_thread::sleep_for(
+        5s);
 
     ex.install_device_cert(
         agent,
         dev_id,
         false);
 
-    if (!cert_installed.wait_for(10s))
+    if (!cert_installed.wait_for(
+            10s))
+    {
         throw std::runtime_error(
             "Timed out waiting for "
             "device_cert_installed");
+    }
+
+    ready = true;
 
     std::cout
         << "[state] READY"
         << std::endl;
 
-    std::cout <<
-R"(
-Commands:
+    /* -----------------------------------------------------
+     * HTTP listener
+     * ----------------------------------------------------- */
 
-  set <ams> <tray> <profile> <setting> <type> <RRGGBBAA> <min> <max>
+    const int server_fd =
+        ::socket(
+            AF_INET,
+            SOCK_STREAM,
+            0);
 
-Example:
+    if (server_fd < 0)
+        throw std::runtime_error(
+            "socket() failed");
 
-  set 0 3 GFG99 GFSG99_15 PETG 1050C0FF 210 250
+    int reuse = 1;
 
-Other commands:
+    ::setsockopt(
+        server_fd,
+        SOL_SOCKET,
+        SO_REUSEADDR,
+        &reuse,
+        sizeof(reuse));
 
-  help
-  quit
+    sockaddr_in address{};
+    address.sin_family =
+        AF_INET;
 
-)";
+    address.sin_port =
+        htons(
+            static_cast<uint16_t>(
+                http_port));
 
-    std::atomic<unsigned long long>
-        sequence{20000};
-
-    std::string line;
-
-    while (!g_stop &&
-           std::getline(std::cin, line))
+    if (
+        ::inet_pton(
+            AF_INET,
+            http_bind.c_str(),
+            &address.sin_addr) != 1)
     {
-        if (line.empty())
+        throw std::runtime_error(
+            "Invalid BAMBU_HTTP_BIND");
+    }
+
+    if (
+        ::bind(
+            server_fd,
+            reinterpret_cast<
+                sockaddr*>(
+                    &address),
+            sizeof(address)) < 0)
+    {
+        throw std::runtime_error(
+            std::string(
+                "bind() failed: ") +
+            std::strerror(errno));
+    }
+
+    if (
+        ::listen(
+            server_fd,
+            16) < 0)
+    {
+        throw std::runtime_error(
+            "listen() failed");
+    }
+
+    std::cout
+        << "[http] listening on "
+        << http_bind
+        << ":"
+        << http_port
+        << std::endl;
+
+    while (!g_stop) {
+        pollfd pfd{};
+        pfd.fd =
+            server_fd;
+        pfd.events =
+            POLLIN;
+
+        const int poll_rc =
+            ::poll(
+                &pfd,
+                1,
+                500);
+
+        if (poll_rc < 0) {
+            if (errno ==
+                EINTR)
+                continue;
+
+            throw std::runtime_error(
+                "poll() failed");
+        }
+
+        if (poll_rc == 0)
             continue;
+
+        const int client_fd =
+            ::accept(
+                server_fd,
+                nullptr,
+                nullptr);
+
+        if (client_fd < 0)
+            continue;
+
+        HttpRequest request;
+        std::string parse_error;
+
+        if (!read_http_request(
+                client_fd,
+                request,
+                parse_error))
+        {
+            send_http_response(
+                client_fd,
+                json_response(
+                    400,
+                    "Bad Request",
+                    {
+                        {
+                            "error",
+                            parse_error
+                        }
+                    }));
+
+            ::close(
+                client_fd);
+
+            continue;
+        }
+
+        HttpResponse response;
 
         if (
-            line == "quit" ||
-            line == "exit")
+            request.method ==
+                "GET" &&
+            request.path ==
+                "/health")
         {
-            break;
+            response =
+                json_response(
+                    ready ? 200 : 503,
+                    ready
+                        ? "OK"
+                        : "Service Unavailable",
+                    {
+                        {
+                            "status",
+                            ready
+                                ? "ready"
+                                : "not_ready"
+                        },
+                        {
+                            "connected",
+                            mqtt_connected.load()
+                        },
+                        {
+                            "ready",
+                            ready.load()
+                        },
+                        {
+                            "printerId",
+                            dev_id
+                        },
+                        {
+                            "printerIp",
+                            dev_ip
+                        },
+                        {
+                            "pluginVersion",
+                            plugin_version
+                        },
+                        {
+                            "firmware",
+                            detect.version
+                        }
+                    });
         }
+        else if (
+            request.method ==
+            "POST")
+        {
+            int ams_id = -1;
+            int tray_id = -1;
+            int consumed = 0;
 
-        if (line == "help") {
-            std::cout <<
-R"(set <ams> <tray> <profile> <setting> <type> <RRGGBBAA> <min> <max>
-)";
-            continue;
-        }
+            const int matches =
+                std::sscanf(
+                    request.path.c_str(),
+                    "/api/v1/ams/%d/trays/%d/filament%n",
+                    &ams_id,
+                    &tray_id,
+                    &consumed);
 
-        std::istringstream input(line);
-
-        std::string command;
-        input >> command;
-
-        if (command != "set") {
-            std::cout
-                << "[error] unknown command"
-                << std::endl;
-            continue;
-        }
-
-        FilamentRequest request;
-
-        input
-            >> request.ams_id
-            >> request.tray_id
-            >> request.tray_info_idx
-            >> request.setting_id
-            >> request.tray_type
-            >> request.tray_color
-            >> request.nozzle_temp_min
-            >> request.nozzle_temp_max;
-
-        if (!input) {
-            std::cout
-                << "[error] invalid set command"
-                << std::endl;
-            continue;
-        }
-
-        if (!mqtt_connected) {
-            std::cout
-                << "[error] printer is not connected"
-                << std::endl;
-            continue;
-        }
-
-        request.sequence_id =
-            std::to_string(++sequence);
-
-        json payload;
-
-        payload["print"] = {
+            if (
+                matches != 2 ||
+                consumed !=
+                    static_cast<int>(
+                        request.path.size()))
             {
-                "sequence_id",
-                request.sequence_id
-            },
-            {
-                "command",
-                "ams_filament_setting"
-            },
-            {
-                "ams_id",
-                request.ams_id
-            },
-            {
-                "tray_id",
-                request.tray_id
-            },
-            {
-                "tray_info_idx",
-                request.tray_info_idx
-            },
-            {
-                "setting_id",
-                request.setting_id
-            },
-            {
-                "tray_color",
-                request.tray_color
-            },
-            {
-                "nozzle_temp_min",
-                request.nozzle_temp_min
-            },
-            {
-                "nozzle_temp_max",
-                request.nozzle_temp_max
-            },
-            {
-                "tray_type",
-                request.tray_type
+                response =
+                    json_response(
+                        404,
+                        "Not Found",
+                        {
+                            {
+                                "error",
+                                "not_found"
+                            }
+                        });
             }
-        };
+            else if (!ready) {
+                response =
+                    json_response(
+                        503,
+                        "Service Unavailable",
+                        {
+                            {
+                                "status",
+                                "failed"
+                            },
+                            {
+                                "error",
+                                "printer_not_ready"
+                            }
+                        });
+            }
+            else {
+                std::lock_guard<std::mutex>
+                    command_lock(
+                        command_mutex);
 
-        filament_tracker.begin(request);
+                json input =
+                    json::parse(
+                        request.body,
+                        nullptr,
+                        false);
 
-        const auto started =
-            std::chrono::steady_clock::now();
+                if (!input.is_object()) {
+                    response =
+                        json_response(
+                            400,
+                            "Bad Request",
+                            {
+                                {
+                                    "error",
+                                    "invalid_json"
+                                }
+                            });
+                }
+                else {
+                    try {
+                        FilamentRequest cmd;
 
-        const int send_rc =
-            ex.send_message_to_printer(
-                agent,
-                dev_id,
-                payload.dump(),
-                1,
-                0);
+                        cmd.ams_id =
+                            ams_id;
 
-        if (send_rc != 0) {
-            filament_tracker.cancel();
+                        cmd.tray_id =
+                            tray_id;
 
-            std::cout
-                << "[command] send failed rc="
-                << send_rc
-                << std::endl;
+                        cmd.tray_info_idx =
+                            input.at(
+                                "profile")
+                            .get<std::string>();
 
-            continue;
-        }
+                        cmd.setting_id =
+                            input.at(
+                                "setting")
+                            .get<std::string>();
 
-        std::cout
-            << "[command] sent sequence="
-            << request.sequence_id
-            << std::endl;
+                        cmd.tray_type =
+                            input.at(
+                                "type")
+                            .get<std::string>();
 
-        FilamentRequest result;
+                        cmd.tray_color =
+                            uppercase(
+                                input.at(
+                                    "color")
+                                .get<std::string>());
 
-        const bool verified =
-            filament_tracker.wait_for_complete(
-                5s,
-                result);
+                        cmd.nozzle_temp_min =
+                            input.at(
+                                "tempMin")
+                            .get<int>();
 
-        const auto elapsed =
-            std::chrono::duration_cast<
-                std::chrono::milliseconds
-            >(
-                std::chrono::steady_clock::now()
-                - started)
-            .count();
+                        cmd.nozzle_temp_max =
+                            input.at(
+                                "tempMax")
+                            .get<int>();
 
-        if (verified) {
-            std::cout
-                << "[command] VERIFIED in "
-                << elapsed
-                << " ms"
-                << std::endl;
+                        if (
+                            ams_id < 0 ||
+                            tray_id < 0)
+                        {
+                            throw std::runtime_error(
+                                "invalid AMS/tray");
+                        }
+
+                        if (
+                            cmd.tray_info_idx.empty() ||
+                            cmd.setting_id.empty() ||
+                            cmd.tray_type.empty())
+                        {
+                            throw std::runtime_error(
+                                "profile, setting and type "
+                                "must not be empty");
+                        }
+
+                        if (!valid_color(
+                                cmd.tray_color))
+                        {
+                            throw std::runtime_error(
+                                "color must be RRGGBBAA");
+                        }
+
+                        if (
+                            cmd.nozzle_temp_min < 0 ||
+                            cmd.nozzle_temp_max > 400 ||
+                            cmd.nozzle_temp_min >
+                                cmd.nozzle_temp_max)
+                        {
+                            throw std::runtime_error(
+                                "invalid temperature range");
+                        }
+
+                        cmd.sequence_id =
+                            std::to_string(
+                                ++sequence);
+
+                        json payload;
+
+                        payload["print"] = {
+                            {
+                                "sequence_id",
+                                cmd.sequence_id
+                            },
+                            {
+                                "command",
+                                "ams_filament_setting"
+                            },
+                            {
+                                "ams_id",
+                                cmd.ams_id
+                            },
+                            {
+                                "tray_id",
+                                cmd.tray_id
+                            },
+                            {
+                                "tray_info_idx",
+                                cmd.tray_info_idx
+                            },
+                            {
+                                "setting_id",
+                                cmd.setting_id
+                            },
+                            {
+                                "tray_color",
+                                cmd.tray_color
+                            },
+                            {
+                                "nozzle_temp_min",
+                                cmd.nozzle_temp_min
+                            },
+                            {
+                                "nozzle_temp_max",
+                                cmd.nozzle_temp_max
+                            },
+                            {
+                                "tray_type",
+                                cmd.tray_type
+                            }
+                        };
+
+                        tracker.begin(
+                            cmd);
+
+                        const auto started =
+                            std::chrono::
+                                steady_clock::
+                                now();
+
+                        const int send_rc =
+                            ex.send_message_to_printer(
+                                agent,
+                                dev_id,
+                                payload.dump(),
+                                1,
+                                0);
+
+                        if (send_rc != 0) {
+                            tracker.cancel();
+
+                            response =
+                                json_response(
+                                    502,
+                                    "Bad Gateway",
+                                    {
+                                        {
+                                            "status",
+                                            "failed"
+                                        },
+                                        {
+                                            "error",
+                                            "send_failed"
+                                        },
+                                        {
+                                            "sendRc",
+                                            send_rc
+                                        }
+                                    });
+                        }
+                        else {
+                            FilamentRequest result;
+
+                            const bool reply_ok =
+                                tracker.wait_for_reply(
+                                    4s,
+                                    result);
+
+                            if (!result.reply_received) {
+                                tracker.cancel();
+
+                                response =
+                                    json_response(
+                                        504,
+                                        "Gateway Timeout",
+                                        {
+                                            {
+                                                "status",
+                                                "failed"
+                                            },
+                                            {
+                                                "error",
+                                                "printer_reply_timeout"
+                                            },
+                                            {
+                                                "sequenceId",
+                                                cmd.sequence_id
+                                            }
+                                        });
+                            }
+                            else if (!reply_ok) {
+                                tracker.cancel();
+
+                                response =
+                                    json_response(
+                                        502,
+                                        "Bad Gateway",
+                                        {
+                                            {
+                                                "status",
+                                                "failed"
+                                            },
+                                            {
+                                                "error",
+                                                "printer_rejected"
+                                            },
+                                            {
+                                                "printerResult",
+                                                result.reply_result
+                                            }
+                                        });
+                            }
+                            else {
+                                /*
+                                 * Strong verification:
+                                 * ignore all previous push_status messages,
+                                 * then explicitly request a new one.
+                                 */
+                                tracker.prepare_push_verification();
+
+                                const std::string verify_sequence =
+                                    std::to_string(
+                                        ++sequence);
+
+                                json verify_pushall = {
+                                    {
+                                        "pushing",
+                                        {
+                                            {
+                                                "sequence_id",
+                                                verify_sequence
+                                            },
+                                            {
+                                                "command",
+                                                "pushall"
+                                            },
+                                            {
+                                                "version",
+                                                1
+                                            },
+                                            {
+                                                "push_target",
+                                                1
+                                            }
+                                        }
+                                    }
+                                };
+
+                                const int verify_rc =
+                                    ex.send_message_to_printer(
+                                        agent,
+                                        dev_id,
+                                        verify_pushall.dump(),
+                                        1,
+                                        0);
+
+                                if (verify_rc != 0) {
+                                    tracker.cancel();
+
+                                    response =
+                                        json_response(
+                                            502,
+                                            "Bad Gateway",
+                                            {
+                                                {
+                                                    "status",
+                                                    "failed"
+                                                },
+                                                {
+                                                    "error",
+                                                    "verification_request_failed"
+                                                },
+                                                {
+                                                    "sendRc",
+                                                    verify_rc
+                                                }
+                                            });
+                                }
+                                else {
+                                    const bool verified =
+                                        tracker.wait_for_verified_push(
+                                            4s,
+                                            result);
+
+                                    const auto elapsed =
+                                        std::chrono::
+                                            duration_cast<
+                                                std::chrono::
+                                                    milliseconds>(
+                                                std::chrono::
+                                                    steady_clock::
+                                                    now() -
+                                                started)
+                                        .count();
+
+                                    if (verified) {
+                                        response =
+                                            json_response(
+                                                200,
+                                                "OK",
+                                                {
+                                                    {
+                                                        "status",
+                                                        "synced"
+                                                    },
+                                                    {
+                                                        "verified",
+                                                        true
+                                                    },
+                                                    {
+                                                        "elapsedMs",
+                                                        elapsed
+                                                    },
+                                                    {
+                                                        "sequenceId",
+                                                        cmd.sequence_id
+                                                    },
+                                                    {
+                                                        "amsId",
+                                                        cmd.ams_id
+                                                    },
+                                                    {
+                                                        "trayId",
+                                                        cmd.tray_id
+                                                    }
+                                                });
+                                    }
+                                    else {
+                                        response =
+                                            json_response(
+                                                504,
+                                                "Gateway Timeout",
+                                                {
+                                                    {
+                                                        "status",
+                                                        "failed"
+                                                    },
+                                                    {
+                                                        "error",
+                                                        "verification_timeout"
+                                                    },
+                                                    {
+                                                        "verified",
+                                                        false
+                                                    },
+                                                    {
+                                                        "elapsedMs",
+                                                        elapsed
+                                                    },
+                                                    {
+                                                        "observed",
+                                                        {
+                                                            {
+                                                                "profile",
+                                                                result.observed_profile
+                                                            },
+                                                            {
+                                                                "type",
+                                                                result.observed_type
+                                                            },
+                                                            {
+                                                                "color",
+                                                                result.observed_color
+                                                            },
+                                                            {
+                                                                "tempMin",
+                                                                result.observed_temp_min
+                                                            },
+                                                            {
+                                                                "tempMax",
+                                                                result.observed_temp_max
+                                                            }
+                                                        }
+                                                    }
+                                                });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    catch (
+                        const std::exception& e)
+                    {
+                        tracker.cancel();
+
+                        response =
+                            json_response(
+                                400,
+                                "Bad Request",
+                                {
+                                    {
+                                        "error",
+                                        "invalid_request"
+                                    },
+                                    {
+                                        "message",
+                                        e.what()
+                                    }
+                                });
+                    }
+                }
+            }
         }
         else {
-            std::cout
-                << "[command] FAILED/TIMEOUT in "
-                << elapsed
-                << " ms"
-                << std::endl;
-
-            std::cout
-                << "          reply_received="
-                << result.reply_received
-                << " reply_success="
-                << result.reply_success
-                << " push_received="
-                << result.push_received
-                << " push_matches="
-                << result.push_matches
-                << std::endl;
+            response =
+                json_response(
+                    404,
+                    "Not Found",
+                    {
+                        {
+                            "error",
+                            "not_found"
+                        }
+                    });
         }
+
+        send_http_response(
+            client_fd,
+            response);
+
+        ::close(
+            client_fd);
     }
+
+    ::close(
+        server_fd);
 
     std::cout
         << "[bridge] stopping"

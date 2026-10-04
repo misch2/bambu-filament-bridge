@@ -35,4 +35,3 @@ target_link_libraries(bambu-bridge PRIVATE
     dl
     nlohmann_json::nlohmann_json
 )
-
