@@ -34,6 +34,13 @@ namespace {
 
 std::atomic<bool> g_stop{false};
 
+constexpr int VIRTUAL_TRAY_MAIN_ID = 255;
+constexpr int VIRTUAL_TRAY_DEPUTY_ID = 254;
+
+bool is_virtual_tray(int ams_id) {
+  return ams_id == VIRTUAL_TRAY_MAIN_ID || ams_id == VIRTUAL_TRAY_DEPUTY_ID;
+}
+
 long long steady_ms() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
@@ -1154,16 +1161,25 @@ int main() try {
 
             json payload;
 
+            const bool virtual_tray = is_virtual_tray(cmd.ams_id);
+
+            const int wire_tray_id =
+                virtual_tray ? VIRTUAL_TRAY_DEPUTY_ID : cmd.tray_id;
+
             payload["print"] = {{"sequence_id", cmd.sequence_id},
                                 {"command", "ams_filament_setting"},
                                 {"ams_id", cmd.ams_id},
-                                {"tray_id", cmd.tray_id},
+                                {"tray_id", wire_tray_id},
                                 {"tray_info_idx", cmd.tray_info_idx},
                                 {"setting_id", cmd.setting_id},
                                 {"tray_color", cmd.tray_color},
                                 {"nozzle_temp_min", cmd.nozzle_temp_min},
                                 {"nozzle_temp_max", cmd.nozzle_temp_max},
                                 {"tray_type", cmd.tray_type}};
+
+            if (virtual_tray) {
+              payload["print"]["slot_id"] = 0;
+            }
 
             tracker.begin(cmd);
 
