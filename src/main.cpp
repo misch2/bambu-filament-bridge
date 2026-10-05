@@ -731,6 +731,8 @@ int main() try {
   }
 
   BBL::detectResult initial_detect{};
+  std::mutex printer_info_mutex;
+  std::string printer_firmware;
 
   auto bring_up_printer = [&](bool is_reconnect) -> bool {
     /*
@@ -782,8 +784,11 @@ int main() try {
       return fail("bind_detect failed rc=" + std::to_string(detect_rc));
     }
 
-    if (!is_reconnect)
-      initial_detect = current_detect;
+    {
+      std::lock_guard<std::mutex> lock(printer_info_mutex);
+
+      printer_firmware = current_detect.version;
+    }
 
     std::cout << "[bridge] detected " << current_detect.dev_name
               << " model=" << current_detect.model_id
@@ -911,12 +916,22 @@ int main() try {
     return true;
   };
 
-  if (!bring_up_printer(false)) {
-    throw std::runtime_error("Initial printer connection failed");
+  const bool initially_connected = bring_up_printer(false);
+
+  if (!initially_connected) {
+    std::cout << "[state] Printer unavailable at startup; "
+              << "bridge will keep retrying in background" << std::endl;
   }
 
   std::thread connection_refresher([&]() {
-    long long last_reconnect_attempt = 0;
+    /*
+     * If the initial connection failed, don't immediately repeat
+     * bind_detect again in the very next loop iteration.
+     *
+     * If the printer later becomes stale after having worked,
+     * enough time will normally have elapsed for an immediate retry.
+     */
+    long long last_reconnect_attempt = steady_ms();
 
     while (!g_stop) {
       if (ready.load()) {
@@ -1041,6 +1056,14 @@ int main() try {
     HttpResponse response;
 
     if (request.method == "GET" && request.path == "/health") {
+      std::string firmware;
+
+      {
+        std::lock_guard<std::mutex> lock(printer_info_mutex);
+
+        firmware = printer_firmware;
+      }
+
       response =
           json_response(ready ? 200 : 503, ready ? "OK" : "Service Unavailable",
                         {
@@ -1050,7 +1073,7 @@ int main() try {
                             {"printerId", dev_id},
                             {"printerIp", dev_ip},
                             {"pluginVersion", plugin_version},
-                            {"firmware", initial_detect.version},
+                            {"firmware", firmware},
                             {"lastMessageAgeMs",
                              last_local_message_ms.load() > 0
                                  ? steady_ms() - last_local_message_ms.load()
