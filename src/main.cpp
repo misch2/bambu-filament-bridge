@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <poll.h>
