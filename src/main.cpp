@@ -32,6 +32,8 @@ using namespace std::chrono_literals;
 
 namespace {
 
+constexpr const char* bridge_version = "1.0.6";
+
 std::atomic<bool> g_stop{false};
 
 constexpr int VIRTUAL_TRAY_MAIN_ID = 255;
@@ -268,6 +270,41 @@ class FilamentTracker {
   }
 
   void handle_push_status(const json& print) {
+    /*
+     * External / virtual trays.
+     *
+     * Dual-nozzle printers expose them in vir_slot:
+     *   255 = main/right
+     *   254 = deputy/left
+     */
+    if (is_virtual_tray(request_.ams_id)) {
+      if (print.contains("vir_slot") && print["vir_slot"].is_array()) {
+        for (const auto& tray : print["vir_slot"]) {
+          if (!tray.is_object())
+            continue;
+
+          if (tray.value("id", "") != std::to_string(request_.ams_id))
+            continue;
+
+          handle_observed_tray(tray);
+          return;
+        }
+      }
+
+      /*
+       * Compatibility with older single-virtual-tray printers.
+       */
+      if (request_.ams_id == VIRTUAL_TRAY_MAIN_ID &&
+          print.contains("vt_tray") && print["vt_tray"].is_object()) {
+        handle_observed_tray(print["vt_tray"]);
+      }
+
+      return;
+    }
+
+    /*
+     * Regular AMS trays.
+     */
     if (!print.contains("ams") || !print["ams"].is_object())
       return;
 
@@ -293,41 +330,43 @@ class FilamentTracker {
         if (tray.value("id", "") != std::to_string(request_.tray_id))
           continue;
 
-        ++push_counter_;
-
-        request_.observed_profile = tray.value("tray_info_idx", "");
-
-        request_.observed_type = tray.value("tray_type", "");
-
-        request_.observed_color = tray.value("tray_color", "");
-
-        request_.observed_temp_min = tray.value("nozzle_temp_min", "");
-
-        request_.observed_temp_max = tray.value("nozzle_temp_max", "");
-
-        if (!request_.verify_push)
-          return;
-
-        if (push_counter_ <= request_.verify_after_counter)
-          return;
-
-        request_.push_received = true;
-
-        request_.push_matches =
-            request_.observed_profile == request_.tray_info_idx &&
-            request_.observed_type == request_.tray_type &&
-            request_.observed_color == request_.tray_color &&
-            request_.observed_temp_min ==
-                std::to_string(request_.nozzle_temp_min) &&
-            request_.observed_temp_max ==
-                std::to_string(request_.nozzle_temp_max);
-
-        if (request_.push_matches) {
-          std::cout << "[command] push_status verified" << std::endl;
-        }
-
+        handle_observed_tray(tray);
         return;
       }
+    }
+  }
+
+  void handle_observed_tray(const json& tray) {
+    ++push_counter_;
+
+    request_.observed_profile = tray.value("tray_info_idx", "");
+
+    request_.observed_type = tray.value("tray_type", "");
+
+    request_.observed_color = tray.value("tray_color", "");
+
+    request_.observed_temp_min = tray.value("nozzle_temp_min", "");
+
+    request_.observed_temp_max = tray.value("nozzle_temp_max", "");
+
+    if (!request_.verify_push)
+      return;
+
+    if (push_counter_ <= request_.verify_after_counter)
+      return;
+
+    request_.push_received = true;
+
+    request_.push_matches =
+        request_.observed_profile == request_.tray_info_idx &&
+        request_.observed_type == request_.tray_type &&
+        request_.observed_color == request_.tray_color &&
+        request_.observed_temp_min ==
+            std::to_string(request_.nozzle_temp_min) &&
+        request_.observed_temp_max == std::to_string(request_.nozzle_temp_max);
+
+    if (request_.push_matches) {
+      std::cout << "[command] push_status verified" << std::endl;
     }
   }
 
@@ -584,6 +623,9 @@ int main() try {
   std::signal(SIGINT, on_signal);
 
   std::signal(SIGTERM, on_signal);
+
+  std::cout << "[bridge] starting bridge version " << bridge_version
+            << std::endl;
 
   const std::string dev_id = env_required("BAMBU_DEV_ID");
 
