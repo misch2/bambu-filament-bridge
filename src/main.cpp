@@ -373,6 +373,46 @@ struct HttpResponse {
   std::string body;
 };
 
+bool constant_time_equal(const std::string& a, const std::string& b) {
+  if (a.size() != b.size())
+    return false;
+
+  unsigned char diff = 0;
+
+  for (size_t i = 0; i < a.size(); ++i) {
+    diff |= static_cast<unsigned char>(a[i]) ^ static_cast<unsigned char>(b[i]);
+  }
+
+  return diff == 0;
+}
+
+bool bearer_authorized(const HttpRequest& request,
+                       const std::string& expected_token) {
+  const auto it = request.headers.find("authorization");
+
+  if (it == request.headers.end())
+    return false;
+
+  const std::string value = trim(it->second);
+
+  const auto separator = value.find(' ');
+
+  if (separator == std::string::npos)
+    return false;
+
+  const std::string scheme = lower(value.substr(0, separator));
+
+  if (scheme != "bearer")
+    return false;
+
+  const std::string token = trim(value.substr(separator + 1));
+
+  if (token.empty())
+    return false;
+
+  return constant_time_equal(token, expected_token);
+}
+
 bool send_all(int fd, const std::string& data) {
   size_t sent = 0;
 
@@ -509,8 +549,14 @@ bool read_http_request(int fd, HttpRequest& request, std::string& error) {
 void send_http_response(int fd, const HttpResponse& response) {
   std::ostringstream out;
 
-  out << "HTTP/1.1 " << response.status << " " << response.reason << "\r\n"
-      << "Content-Type: application/json\r\n"
+  out << "HTTP/1.1 " << response.status << " " << response.reason << "\r\n";
+
+  if (response.status == 401) {
+    out << "WWW-Authenticate: Bearer realm=\"bambu-bridge\"\r\n";
+  }
+
+  out << "Content-Type: application/json\r\n"
+      << "Cache-Control: no-store\r\n"
       << "Content-Length: " << response.body.size() << "\r\n"
       << "Connection: close\r\n"
       << "\r\n"
@@ -554,6 +600,12 @@ int main() try {
   const std::string http_bind = env_or("BAMBU_HTTP_BIND", "0.0.0.0");
 
   const int http_port = std::stoi(env_or("BAMBU_HTTP_PORT", "8080"));
+
+  const std::string http_token = env_required("BAMBU_HTTP_TOKEN");
+
+  if (http_token.size() < 32) {
+    throw std::runtime_error("BAMBU_HTTP_TOKEN must be at least 32 characters");
+  }
 
   ensure_config(data_dir);
 
@@ -949,6 +1001,9 @@ int main() try {
   std::cout << "[http] listening on " << http_bind << ":" << http_port
             << std::endl;
 
+  std::cout << "[http] bearer authentication enabled for /api/v1/*"
+            << std::endl;
+
   while (!g_stop) {
     pollfd pfd{};
     pfd.fd = server_fd;
@@ -1002,6 +1057,13 @@ int main() try {
                                  : -1},
                             {"reconnecting", reconnecting.load()},
                         });
+    } else if (request.path.rfind("/api/v1/", 0) == 0 &&
+               !bearer_authorized(request, http_token)) {
+      std::cout << "[http] rejected unauthorized request: " << request.method
+                << " " << request.path << std::endl;
+
+      response =
+          json_response(401, "Unauthorized", {{"error", "unauthorized"}});
     } else if (request.method == "POST") {
       int ams_id = -1;
       int tray_id = -1;
