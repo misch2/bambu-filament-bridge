@@ -1,0 +1,16 @@
+services:
+  bridge:
+    image: ghcr.io/misch2/bambu-filament-bridge:0.1.0
+    build: .
+    restart: unless-stopped
+    environment:
+      BAMBU_DEV_ID: ${BAMBU_DEV_ID:?Set BAMBU_DEV_ID}
+      BAMBU_DEV_IP: ${BAMBU_DEV_IP:?Set BAMBU_DEV_IP}
+      BAMBU_ACCESS_CODE: ${BAMBU_ACCESS_CODE:?Set BAMBU_ACCESS_CODE}
+      BAMBU_HTTP_TOKEN: ${BAMBU_HTTP_TOKEN:?Set BAMBU_HTTP_TOKEN}
+    ports:
+      - "8080:8080"
+    volumes:
+      - bridge-data:/data
+volumes:
+  bridge-data:

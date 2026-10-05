@@ -1,0 +1,41 @@
+name: CI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: true
+      - run: sudo apt-get update && sudo apt-get install -y clang-format-14 python3-yaml
+      - run: cmake -S . -B build -DBUILD_TESTING=ON
+      - run: cmake --build build -j2
+      - run: ctest --test-dir build --output-on-failure
+      - run: clang-format-14 --dry-run --Werror src/*.cpp include/bfb/*.hpp tests/*.cpp tests/*.hpp
+      - run: python3 scripts/check_contract.py
+  docker:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: true
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: false
+          load: true
+          tags: bfb:ci
+      - name: Standalone runtime smoke (no printer/network)
+        run: docker run --rm --platform '${{ matrix.platform }}' --network none -v "$PWD/scripts/image_smoke.sh:/smoke.sh:ro" --entrypoint /bin/sh bfb:ci -c 'timeout 30 sh /smoke.sh standalone'
+      - name: Supervisor options runtime smoke (no printer/network)
+        run: docker run --rm --platform '${{ matrix.platform }}' --network none -v "$PWD/scripts/image_smoke.sh:/smoke.sh:ro" --entrypoint /bin/sh bfb:ci -c 'timeout 30 sh /smoke.sh home-assistant'

@@ -1,0 +1,28 @@
+name: Bambu Filament Bridge
+version: "0.1.0"
+slug: bambu_filament_bridge
+description: Authenticated, verified AMS filament metadata updates over LAN
+url: https://github.com/misch2/bambu-filament-bridge
+arch:
+  - amd64
+  - aarch64
+image: ghcr.io/misch2/bambu-filament-bridge
+startup: application
+boot: auto
+init: false
+environment:
+  BFB_HOME_ASSISTANT: "1"
+ports:
+  8080/tcp: 8080
+ports_description:
+  8080/tcp: Filament bridge HTTP API (Bearer token required for writes)
+options:
+  printer_id: ""
+  printer_ip: ""
+  access_code: ""
+  http_token: ""
+schema:
+  printer_id: str
+  printer_ip: str
+  access_code: password
+  http_token: password

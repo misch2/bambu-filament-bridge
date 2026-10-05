@@ -1,37 +1,37 @@
 cmake_minimum_required(VERSION 3.20)
-project(bambu_bridge LANGUAGES CXX)
-
+project(bambu_filament_bridge VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-
-set(OBN_ROOT "/home/runner/open-bamboo-networking"
-    CACHE PATH "Path to open-bamboo-networking checkout")
-
-find_package(nlohmann_json REQUIRED)
-
-add_executable(bambu-bridge
-    src/main.cpp
-    ${OBN_ROOT}/tools/plugin_runner/plugin_loader.cpp
-)
-
-target_include_directories(bambu-bridge PRIVATE
-    ${OBN_ROOT}/include
-    ${OBN_ROOT}/tools/plugin_runner
-)
-
-target_compile_definitions(bambu-bridge PRIVATE
-    ABI_VERSION=0x020802
-)
-
-target_compile_options(bambu-bridge PRIVATE
-    -Wall
-    -Wextra
-    -Wpedantic
-)
-
-target_link_libraries(bambu-bridge PRIVATE
-    pthread
-    dl
-    nlohmann_json::nlohmann_json
-)
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  message(FATAL_ERROR "The bridge targets Linux. On Windows use Docker or WSL.")
+endif()
+find_package(Threads REQUIRED)
+set(OBN_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/open-bamboo-networking" CACHE PATH "Pinned open-bamboo-networking checkout")
+if(NOT EXISTS "${OBN_ROOT}/tools/plugin_runner/plugin_loader.cpp")
+  message(FATAL_ERROR "Initialize dependencies: git submodule update --init")
+endif()
+add_library(bfb_core src/config.cpp src/bridge_service.cpp src/http_server.cpp)
+target_include_directories(bfb_core PUBLIC include third_party)
+target_link_libraries(bfb_core PUBLIC Threads::Threads)
+target_compile_options(bfb_core PRIVATE -Wall -Wextra -Wpedantic)
+add_library(bfb_plugin src/plugin_backend.cpp "${OBN_ROOT}/tools/plugin_runner/plugin_loader.cpp")
+target_include_directories(bfb_plugin PRIVATE "${OBN_ROOT}/include" "${OBN_ROOT}/tools/plugin_runner")
+target_compile_definitions(bfb_plugin PRIVATE ABI_VERSION=0x020802)
+target_compile_options(bfb_plugin PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(bfb_plugin PUBLIC bfb_core ${CMAKE_DL_LIBS})
+add_executable(bambu-bridge src/main.cpp)
+target_link_libraries(bambu-bridge PRIVATE bfb_plugin)
+install(TARGETS bambu-bridge RUNTIME DESTINATION bin)
+include(CTest)
+if(BUILD_TESTING)
+  add_executable(bfb_tests tests/tests.cpp)
+  target_link_libraries(bfb_tests PRIVATE bfb_core)
+  target_compile_options(bfb_tests PRIVATE -Wall -Wextra -Wpedantic)
+  foreach(suite config validation service verification concurrency http)
+    add_test(NAME ${suite} COMMAND bfb_tests ${suite})
+    set_tests_properties(${suite} PROPERTIES TIMEOUT 20)
+  endforeach()
+  add_executable(plugin_smoke tests/plugin_smoke.cpp)
+  target_link_libraries(plugin_smoke PRIVATE bfb_plugin)
+endif()

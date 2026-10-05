@@ -1,0 +1,313 @@
+openapi: 3.0.3
+info:
+  title: Bambu Filament Bridge
+  version: 1.0.0
+  description: >-
+    API v1 for physical AMS slot metadata. HTTP 503 from health is a valid
+    bridge-alive/printer-not-ready state. No inventory or Filament Manager sync.
+    Service release version is independent of this API contract version.
+  license:
+    name: AGPL-3.0-or-later
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+servers:
+  - url: http://localhost:8080
+security:
+  - bearerAuth: []
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Printer readiness (public)
+      security: []
+      responses:
+        '200':
+          description: Printer connected with valid fresh state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+              example:
+                status: ready
+                connected: true
+                ready: true
+                reconnecting: false
+                printerId: EXAMPLE_DEVICE
+                printerIp: 192.0.2.1
+                pluginVersion: 02.08.02.99
+                firmware: example
+                lastMessageAgeMs: 123
+        '503':
+          description: Bridge alive, printer not ready; valid health response, not an API failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+              example:
+                status: not_ready
+                connected: false
+                ready: false
+                reconnecting: true
+                printerId: EXAMPLE_DEVICE
+                printerIp: 192.0.2.1
+                pluginVersion: 02.08.02.99
+                firmware: ''
+                lastMessageAgeMs: -1
+  /api/v1/capabilities:
+    get:
+      operationId: getCapabilities
+      summary: Implemented bridge features and runtime backend identity
+      description: >-
+        Available while reconnecting. A feature indicates implementation support,
+        not proof that the configured printer/firmware has passed a live test.
+      responses:
+        '200':
+          description: Actual loaded backend metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Capabilities'
+              example:
+                apiVersion: 1
+                backend: open-bamboo-networking
+                pluginVersion: 02.08.02.99
+                printerId: EXAMPLE_DEVICE
+                features:
+                  amsFilamentWrite: true
+                  externalFilamentWrite: false
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/ams/{amsId}/trays/{trayId}/filament:
+    post:
+      operationId: setAmsFilament
+      summary: Update and verify physical AMS tray metadata
+      description: >-
+        Success requires send success, a success reply for this command, and fresh
+        matching target-slot telemetry after that reply and a new pushall request.
+        setting_id is compared when present in telemetry; stock telemetry may omit
+        it. Commands are serialized. Queue wait is bounded to one second; printer
+        reply and verification deadlines are four seconds each. 502/504 can occur
+        after printer state changed. Bodies over 65536 bytes are rejected. Headers
+        are limited to 16384 bytes. Chunked transfer encoding is unsupported.
+        Reserved virtual/external IDs 254 and 255 are not accepted.
+      parameters:
+        - name: amsId
+          in: path
+          required: true
+          description: Non-negative decimal AMS ID, reserved external IDs excluded
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 253
+        - name: trayId
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 3
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Filament'
+            example:
+              profile: GFG99
+              setting: GFSG99_15
+              type: PETG
+              color: 808080FF
+              tempMin: 220
+              tempMax: 260
+      responses:
+        '200':
+          description: Reply accepted and fresh target metadata verified
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Synced'
+              example:
+                status: synced
+                verified: true
+                elapsedMs: 1234
+                sequenceId: '20001'
+                amsId: 0
+                trayId: 3
+        '400':
+          description: invalid_json, invalid_request, or invalid_content_type
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: not_found (unknown route; external endpoints are absent)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: request_too_large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: send_failed, printer_rejected, verification_request_failed, or backend_failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: printer_not_ready (including disconnect during write) or printer_busy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                status: error
+                error: printer_not_ready
+                message: Printer is currently not ready
+        '504':
+          description: printer_reply_timeout or verification_timeout
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Random operator-configured token with at least 32 characters
+  responses:
+    Unauthorized:
+      description: Missing or incorrect Bearer token
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+          example: Bearer realm="bambu-bridge"
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            status: error
+            error: unauthorized
+            message: Request could not be completed
+  schemas:
+    Health:
+      type: object
+      required: [status, connected, ready, reconnecting, printerId, printerIp, pluginVersion, firmware, lastMessageAgeMs]
+      properties:
+        status:
+          type: string
+          enum: [ready, not_ready]
+        connected:
+          type: boolean
+        ready:
+          type: boolean
+        reconnecting:
+          type: boolean
+        printerId:
+          type: string
+        printerIp:
+          type: string
+        pluginVersion:
+          type: string
+        firmware:
+          type: string
+        lastMessageAgeMs:
+          type: integer
+          format: int64
+          minimum: -1
+          description: Age of last valid status, or -1 when none exists in this session
+    Capabilities:
+      type: object
+      required: [apiVersion, backend, pluginVersion, printerId, features]
+      properties:
+        apiVersion:
+          type: integer
+          enum: [1]
+        backend:
+          type: string
+          description: open-bamboo-networking or user-provided (test backends may have another identity)
+        pluginVersion:
+          type: string
+        printerId:
+          type: string
+        features:
+          type: object
+          required: [amsFilamentWrite, externalFilamentWrite]
+          properties:
+            amsFilamentWrite:
+              type: boolean
+              enum: [true]
+            externalFilamentWrite:
+              type: boolean
+              enum: [false]
+    Filament:
+      type: object
+      required: [profile, setting, type, color, tempMin, tempMax]
+      properties:
+        profile:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: Must contain a non-whitespace character and no control characters
+        setting:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: Must contain a non-whitespace character and no control characters
+        type:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: Must contain a non-whitespace character and no control characters
+        color:
+          type: string
+          pattern: '^[0-9A-Fa-f]{8}$'
+          description: RRGGBBAA, normalized to uppercase
+        tempMin:
+          type: integer
+          minimum: 0
+          maximum: 400
+          description: Must not exceed tempMax
+        tempMax:
+          type: integer
+          minimum: 0
+          maximum: 400
+    Synced:
+      type: object
+      required: [status, verified, elapsedMs, sequenceId, amsId, trayId]
+      properties:
+        status:
+          type: string
+          enum: [synced]
+        verified:
+          type: boolean
+          enum: [true]
+        elapsedMs:
+          type: integer
+          format: int64
+          minimum: 0
+        sequenceId:
+          type: string
+        amsId:
+          type: integer
+        trayId:
+          type: integer
+    Error:
+      type: object
+      required: [status, error, message]
+      properties:
+        status:
+          type: string
+          enum: [error]
+        error:
+          type: string
+          description: Stable machine-readable identifier; clients should allow future identifiers
+        message:
+          type: string

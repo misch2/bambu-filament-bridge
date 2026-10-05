@@ -1,1 +1,14 @@
-/build/
+/build*/
+/.env
+/data/
+/certs/
+/secrets/
+*.so
+*.dll
+*.dylib
+*.key
+*.pem
+*.cer
+__pycache__/
+!third_party/**
+CODEX_TASK.md
