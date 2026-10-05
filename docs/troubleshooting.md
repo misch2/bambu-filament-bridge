@@ -13,6 +13,7 @@
 | HTTP 503 `printer_busy` | Command queue wait exceeded one second. Only one operation may own the printer path. Retry after inspecting state. |
 | Permission denied in `/data` | Give UID/GID 10001 write access to a bind mount and read access to secret files. |
 | Plugin cannot load | Initialize the submodule when building; check architecture, ABI `0x020802` and plugin runtime library dependencies. Stock x86 binaries cannot run natively on ARM. |
+| Docker plugin build cannot find OpenSSL libraries | `libssl-dev` is required inside the toolchain stage. The Dockerfile checks and passes target multiarch library paths explicitly; use the updated Dockerfile. If it still fails, retain the full build log, including QEMU/BuildKit versions and package installation. Finding an OpenSSL version alone only confirms its headers were found. |
 
 Write verification compares metadata from one fresh tray observation, never from
 a cached merge. `setting_id` is compared if present; stock telemetry can omit it.

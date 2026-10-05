@@ -7,7 +7,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /src
 FROM toolchain AS plugin
 COPY third_party/open-bamboo-networking /src/open-bamboo-networking
-RUN cmake -S open-bamboo-networking -B plugin-build \
+# Resolve Debian's target multiarch paths explicitly for emulated builds.
+RUN set -eu; \
+    libdir="/usr/lib/$(cc -print-multiarch)"; \
+    test -r "$libdir/libssl.so"; \
+    test -r "$libdir/libcrypto.so"; \
+    cmake -S open-bamboo-networking -B plugin-build \
+      -DOPENSSL_SSL_LIBRARY="$libdir/libssl.so" \
+      -DOPENSSL_CRYPTO_LIBRARY="$libdir/libcrypto.so" \
       -DOBN_VERSION=02.08.02.99 -DOBN_RELEASE=ON -DOBN_PATCH_CLIENT_CONF=OFF -DOBN_BUILD_TESTS=OFF \
     && cmake --build plugin-build --target bambu_networking -j2
 

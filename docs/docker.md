@@ -22,6 +22,12 @@ The Debian base is pinned by digest. Apt packages follow the bookworm security
 repositories; dependency source pins are in THIRD_PARTY_NOTICES.md. This is a
 pinned source build, not a claim of bit-identical Debian package output forever.
 
+The plugin build passes explicit OpenSSL library paths from the target compiler's
+Debian multiarch directory (`cc -print-multiarch`) to CMake. Both shared libraries
+must exist before configuration starts. This avoids relying on CMake's automatic
+library search paths during ARM64 emulation and uses the same installed
+`libssl-dev` package on both platforms.
+
 Docker HEALTHCHECK calls `/health`. A disconnected/stale printer makes the
 container unhealthy (HTTP 503), while the HTTP server stays alive and reconnects.
 Docker does not automatically restart containers merely because they are unhealthy.

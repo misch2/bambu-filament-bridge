@@ -16,3 +16,4 @@ secrets
 **/__pycache__
 AGENTS.md
 CODEX_TASK.md
+logs_*.zip
