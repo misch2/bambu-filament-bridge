@@ -32,7 +32,7 @@ using namespace std::chrono_literals;
 
 namespace {
 
-constexpr const char* bridge_version = "1.0.6";
+constexpr const char* bridge_version = "0.4.0";
 
 std::atomic<bool> g_stop{false};
 
