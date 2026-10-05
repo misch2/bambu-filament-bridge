@@ -1,7 +1,7 @@
 name: Bambu Filament Bridge
 version: "0.1.0"
 slug: bambu_filament_bridge
-description: Authenticated, verified AMS filament metadata updates over LAN
+description: Verified AMS filament updates via authenticated HTTP API; requires printer Developer Mode
 url: https://github.com/misch2/bambu-filament-bridge
 arch:
   - amd64

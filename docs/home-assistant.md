@@ -10,7 +10,7 @@ password schema fields, and `/data/options.json`. No legacy `build.yaml` is need
 Prerequisite: publish the `0.1.0` release image before installing from the store.
 The repository does not publish anything during local implementation/testing.
 
-1. Enable Developer/LAN mode and note the printer's serial, IPv4 address and code.
+1. For the bundled open-source backend, enable LAN-only mode and Developer Mode, then note the printer’s serial, IPv4 address and access code. Requirements differ when using a user-supplied stock plugin.
 2. In the Home Assistant App store repository menu add
    `https://github.com/misch2/bambu-filament-bridge`.
 3. Install **Bambu Filament Bridge**. Supported packaging architectures are

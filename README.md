@@ -57,6 +57,100 @@ access code. `/health` intentionally reveals printer ID/IP and version informati
 without authentication. HTTP 503 means the process is alive but the printer is
 not ready. [Docker instructions](docs/docker.md) cover storage and secret files.
 
+## Native Linux / systemd
+
+Run the same `bambu-bridge` binary directly on a Linux host, without Docker or
+Home Assistant. The backend and HTTP API are unchanged: `BAMBU_PLUGIN` selects
+the networking library. Keep your existing plugin, certificates and runtime
+configuration when migrating a working installation. Running natively does not
+itself change the printer's mode requirements or enable cloud communication.
+
+The example below assumes an existing `runner` user/group and checkout at
+`/home/runner/bambu-bridge`. Adjust these paths and the account in the
+[example systemd unit](packaging/bambu-bridge.service) for another installation.
+Run the build and configuration steps as the service account. On Debian/Ubuntu,
+install the build tools first (CMake >=3.20 and C++17 are required):
+
+```sh
+sudo apt-get update
+sudo apt-get install build-essential cmake git ca-certificates curl
+cd /home/runner/bambu-bridge
+git submodule update --init
+cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+```
+
+For a new checkout, clone with `--recurse-submodules` as shown in the Docker
+quick start. These commands build the bridge and run its fake-backend tests;
+they do not build or download a proprietary plugin. Use your existing
+ABI-compatible stock plugin (the prototype used `02.08.02.54`, ABI `0x020802`),
+with its required runtime libraries installed on the host and a matching CPU
+architecture. Stock-plugin operation with the refactored bridge still needs
+real-printer validation; the recorded prototype test does not specify printer
+mode.
+
+For the same open-source backend as the Docker image, build the pinned submodule
+separately, without switching it to an upstream branch:
+
+```sh
+sudo apt-get install pkg-config libssl-dev libcurl4-openssl-dev zlib1g-dev uthash-dev
+cmake -S third_party/open-bamboo-networking -B build-plugin \
+  -DOBN_VERSION=02.08.02.99 -DOBN_RELEASE=ON \
+  -DOBN_PATCH_CLIENT_CONF=OFF -DOBN_BUILD_TESTS=OFF
+cmake --build build-plugin --target bambu_networking -j2
+```
+
+The initial plugin build fetches pinned dependencies and needs internet access.
+Set `BAMBU_PLUGIN=/home/runner/bambu-bridge/build-plugin/libbambu_networking.so`
+in that case. Without operator-supplied signing credentials, this backend
+requires LAN-only mode and Developer Mode on firmware enforcing authorization.
+Use `OBN_BLOCK_CLOUD=1`, `OBN_LOG_LEVEL=info` and `OBN_LOG_TO_FILE=0` in `.env`
+to match the image's plugin settings.
+
+Keep an existing `.env`; for a new installation only, copy `.env.example` to
+`.env`. Fill in `BAMBU_DEV_ID`, `BAMBU_DEV_IP`, `BAMBU_ACCESS_CODE` and a random
+`BAMBU_HTTP_TOKEN` of at least 32 characters. Also set absolute host paths:
+
+```dotenv
+# Replace with the path to your existing compatible plugin.
+BAMBU_PLUGIN=/absolute/path/to/libbambu_networking.so
+BAMBU_DATA_DIR=/home/runner/.local/share/bambu-filament-bridge
+BAMBU_CERT_DIR=/home/runner/.local/share/bambu-filament-bridge/certs
+BAMBU_HTTP_BIND=0.0.0.0
+BAMBU_HTTP_PORT=8080
+```
+
+For an existing setup, use its actual data and certificate directories instead
+of the example paths. The account must be able to read the plugin and required
+certificates and write to both runtime directories. The bridge creates missing
+runtime directories but does not supply stock-plugin certificates. Protect
+`.env` with `chmod 600 .env`. Keep private runtime files outside the checkout.
+See [configuration](docs/configuration.md) for secret-file alternatives.
+
+The binary does not read `.env` itself; systemd's `EnvironmentFile` loads it.
+Use literal `KEY=value` assignments, without `export`, `$HOME`, `~` or references
+to other variables. Changes to `.env` take effect when the service restarts.
+
+For a new service, install and start the unit below. If the service already
+exists, review the example against your current unit before replacing it, then
+use `sudo systemctl restart bambu-bridge.service` after `daemon-reload`.
+
+```sh
+sudo install -m 0644 packaging/bambu-bridge.service /etc/systemd/system/bambu-bridge.service
+sudo systemd-analyze verify /etc/systemd/system/bambu-bridge.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now bambu-bridge.service
+sudo systemctl status bambu-bridge.service
+sudo journalctl -u bambu-bridge.service -f
+```
+
+After changing only `.env`, a restart is enough. Check
+`curl -i http://localhost:8080/health`: HTTP 503 while connecting/reconnecting is
+expected; HTTP 200 indicates readiness. SpoolmanSync uses
+`BAMBU_BRIDGE_URL=http://<Linux-host-IP>:8080` and the same bridge HTTP token.
+Restrict access to the HTTP port to your trusted network, as for Docker.
+
 ## Home Assistant quick start
 
 After the `0.1.0` multi-architecture image is published, add this GitHub repository
@@ -114,7 +208,8 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-The plugin itself is built separately in Docker; core builds and tests use the
-vendored JSON header and need no network after checkout. Windows developers use
+The plugin itself is built separately (see [native setup](#native-linux--systemd)
+or Docker); core builds and tests use the vendored JSON header and need no
+network after checkout. Windows developers use
 Docker or WSL. See [contributing](CONTRIBUTING.md), [architecture](docs/architecture.md),
 [configuration](docs/configuration.md), and [troubleshooting](docs/troubleshooting.md).

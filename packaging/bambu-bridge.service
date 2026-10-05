@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Example native deployment: adjust account and absolute paths for your host.
+[Unit]
+Description=Bambu Filament Bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=runner
+Group=runner
+WorkingDirectory=/home/runner/bambu-bridge
+EnvironmentFile=/home/runner/bambu-bridge/.env
+ExecStart=/home/runner/bambu-bridge/build/bambu-bridge
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
