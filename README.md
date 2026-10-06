@@ -158,6 +158,11 @@ to the Home Assistant App store repositories, install **Bambu Filament Bridge**,
 fill its four options, and start it. It runs the exact standalone image and
 persists `/data`. [Full App setup](docs/home-assistant.md).
 
+The App needs no manual certificate copying by default: `verify_printer_tls`
+defaults to `false`. Printer traffic remains TLS encrypted, but the certificate
+and hostname are not verified, so a LAN attacker can impersonate the printer.
+Enable the option with your own printer CA bundle if you need TLS verification.
+
 ## SpoolmanSync
 
 Set these on SpoolmanSync, using the same token configured on the bridge:

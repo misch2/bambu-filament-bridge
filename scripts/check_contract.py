@@ -39,6 +39,10 @@ def main():
     addon = yaml.safe_load((ROOT / "home-assistant/bambu_filament_bridge/config.yaml").read_text())
     require(addon["arch"] == ["amd64", "aarch64"], "App architectures mismatch")
     require(addon["schema"]["http_token"] == addon["schema"]["access_code"] == "password", "App secrets must be passwords")
+    require(addon["options"]["verify_printer_tls"] is False and
+            addon["schema"]["verify_printer_tls"] == "bool", "App TLS option mismatch")
+    require({"type": "app_config", "read_only": True, "path": "/config"} in addon["map"],
+            "App certificate mount missing")
     version = addon["version"]
     require(f"VERSION {version} LANGUAGES" in (ROOT / "CMakeLists.txt").read_text(), "CMake/App version mismatch")
     require(f'io.hass.version="{version}"' in (ROOT / "Dockerfile").read_text(), "Image/App version mismatch")

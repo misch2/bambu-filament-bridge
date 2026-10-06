@@ -39,3 +39,5 @@ jobs:
         run: docker run --rm --platform '${{ matrix.platform }}' --network none -v "$PWD/scripts/image_smoke.sh:/smoke.sh:ro" --entrypoint /bin/sh bfb:ci -c 'timeout 30 sh /smoke.sh standalone'
       - name: Supervisor options runtime smoke (no printer/network)
         run: docker run --rm --platform '${{ matrix.platform }}' --network none -v "$PWD/scripts/image_smoke.sh:/smoke.sh:ro" --entrypoint /bin/sh bfb:ci -c 'timeout 30 sh /smoke.sh home-assistant'
+      - name: App TLS configuration and certificate import (no printer/network)
+        run: docker run --rm --platform '${{ matrix.platform }}' --network none -v "$PWD/scripts/entrypoint_smoke.sh:/smoke.sh:ro" --entrypoint /bin/sh bfb:ci -c 'timeout 30 sh /smoke.sh'

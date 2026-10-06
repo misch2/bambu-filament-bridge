@@ -25,6 +25,15 @@ For the open backend, enable Developer Mode / LAN access. The image sets
 verbose plugin payload logs or supply slicer/cloud credentials for normal use.
 Private signing material is not needed or distributed for this mode.
 
+The open backend verifies LAN TLS by default and looks for `printer.cer` in
+`BAMBU_CERT_DIR`. This is the printer CA bundle, separate from slicer signing
+credentials. Standalone operators supply their own certificate or explicitly set
+`lan_tls_skip_verify = 1` in `<BAMBU_DATA_DIR>/obn.conf` to disable peer verification.
+The Home Assistant App instead defaults `verify_printer_tls` to `false`, requiring
+no certificate copying; its entrypoint manages that backend setting and supports
+optional certificate import. See [App setup](home-assistant.md) for the security
+tradeoff and how to enable verification.
+
 To use a stock ABI-compatible plugin, mount the operator's own library read-only
 and set `BAMBU_PLUGIN` to its container path. Mount the operator's required
 certificate directory separately and set `BAMBU_CERT_DIR`. The project does not

@@ -5,6 +5,7 @@
 | `/health` returns 503 | Process is alive. Check connected/ready/reconnecting, mode, IP, LAN code and plugin version in logs. Wait for provisioning/reconnect. |
 | Connected but not ready | Fresh valid push status is required after provisioning. Stock plugins also require the certificate-install event. Verify the operator-supplied certificate setup. |
 | Repeated reconnect | Confirm printer IP, firmware Developer/LAN settings, LAN firewall and plugin prerequisites. Six seconds without valid telemetry makes the service stale. |
+| `TLS verify enabled but printer.cer missing` | Standalone: supply your own `printer.cer` in `BAMBU_CERT_DIR`. The App defaults `verify_printer_tls` to false and needs no certificate; update to an image containing this startup behavior. If enabling verification, supply the certificate through the App configuration directory; see [App setup](home-assistant.md). |
 | HTTP 401 | Token is missing/wrong. Use `Authorization: Bearer <token>`; capabilities requires it too. |
 | HTTP 400 | Check required JSON fields, application/json, eight hexadecimal color digits, integral temperatures 0..400 with min <= max, AMS 0..253 and tray 0..3. |
 | HTTP 413 | Body limit is 65536 bytes; headers 16384. Chunked transfer is unsupported; send Content-Length. |

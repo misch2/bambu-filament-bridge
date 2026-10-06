@@ -21,8 +21,14 @@ options:
   printer_ip: ""
   access_code: ""
   http_token: ""
+  verify_printer_tls: false
 schema:
   printer_id: str
   printer_ip: str
   access_code: password
   http_token: password
+  verify_printer_tls: bool
+map:
+  - type: app_config
+    read_only: true
+    path: /config

@@ -37,6 +37,11 @@ jq -e '.error == "printer_not_ready"' /tmp/write.json >/dev/null
 kill -TERM "$pid"
 wait "$pid"
 trap - EXIT
+if [ "${1:-standalone}" = home-assistant ]; then
+    # Check the backend's effective value, after it has loaded obn.conf.
+    grep -qx 'OBN_SKIP_TLS_VERIFY=1' /data/obn.env
+    [ ! -e /data/certs/printer.cer ]
+fi
 if grep -q "$BAMBU_ACCESS_CODE" /tmp/bfb-smoke.log || grep -q "$BAMBU_HTTP_TOKEN" /tmp/bfb-smoke.log; then
     echo 'Secret appeared in logs' >&2
     exit 1
