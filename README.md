@@ -4,10 +4,10 @@ Keep the filament loaded in your Bambu printer in sync with your filament invent
 
 Bambu Filament Bridge is a small service that allows applications such as
 [SpoolmanSync](https://github.com/gibz104/SpoolmanSync) to update the filament
-metadata stored in a physical Bambu AMS slot.
+metadata stored in a Bambu AMS tray or external spool holder.
 
 When you assign a spool in SpoolmanSync, the bridge can update the corresponding
-AMS tray in the printer as well. Bambu Studio then sees the same filament type,
+AMS tray or external holder in the printer as well. Bambu Studio then sees the same filament type,
 color and profile that your inventory system says is loaded.
 
 ```mermaid
@@ -54,7 +54,7 @@ Its purpose is deliberately narrow:
 | --- | --- |
 | Bambu X2D | ✅ Tested |
 | AMS filament slots | ✅ Supported |
-| External spool slots | ❌ Not supported yet |
+| External spool slots | ✅ Supported via IDs 254/255 |
 | Other Bambu printers | ⚠️ Not yet tested |
 
 Other Bambu printers using the same networking interface may work, but only the
@@ -370,6 +370,21 @@ Applications should use the API rather than depending on the internal Bambu
 networking implementation.
 
 The full API definition is available in [`openapi.yaml`](openapi.yaml).
+
+External holders use the same endpoint with virtual AMS ID **254 for left/deputy**
+and **255 for right/main** (or the single external holder), and tray ID **0**.
+For example, update the left X2D holder:
+
+```bash
+curl --fail-with-body -X POST "$BAMBU_BRIDGE_URL/api/v1/ams/254/trays/0/filament" \
+  -H "Authorization: Bearer $BAMBU_BRIDGE_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"profile":"GFG99","setting":"GFSG99_15","type":"PETG","color":"808080FF","tempMin":220,"tempMax":260}'
+```
+
+Use ID 255 for the right holder. Capabilities reports `externalFilamentWrite=true`.
+Success still requires a printer success reply and fresh matching holder telemetry;
+see [compatibility and validation scope](docs/compatibility.md).
 
 ---
 

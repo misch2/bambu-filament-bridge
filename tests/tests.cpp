@@ -58,10 +58,13 @@ struct Fixture {
   FakeBackend fake;
   BridgeService service;
   Config cfg = config();
-  explicit Fixture(Timing t = timing(), bool start_ready = true, bool certificate_ack = true)
+  explicit Fixture(Timing t = timing(), bool start_ready = true, bool certificate_ack = true,
+                   int ams = 0, int layout = 0)
       : service(fake, t) {
     fake.auto_connect = start_ready;
     fake.require_certificate = fake.emit_certificate = certificate_ack;
+    fake.ams = ams;
+    fake.status_layout = layout;
     service.start();
     if (start_ready) wait_until([&] { return service.health().ready; });
   }
@@ -188,7 +191,7 @@ void validation() {
   r.body = b.dump();
   check(400);
   r.body = body().dump();
-  for (auto path : {"/api/v1/ams/-1/trays/0/filament", "/api/v1/ams/254/trays/0/filament",
+  for (auto path : {"/api/v1/ams/-1/trays/0/filament", "/api/v1/ams/256/trays/0/filament",
                     "/api/v1/ams/0/trays/4/filament", "/api/v1/ams/999999999999/trays/0/filament",
                     "/api/v1/ams/a/trays/0/filament"}) {
     r.path = path;
@@ -266,13 +269,16 @@ void verification() {
       {"verification_timeout", 504, [](auto& b) { b.wrong_tray = true; }},
       {"verification_timeout", 504, [](auto& b) { b.pre_reply_only = true; }},
       {"printer_not_ready", 503, [](auto& b) { b.disconnect_write = true; }}};
-  for (auto& c : cases) {
-    Fixture f;
-    c.setup(f.fake);
-    auto r = handle_request(request(f.cfg), f.service, f.cfg);
-    CHECK(r.status == c.code);
-    CHECK(json::parse(r.body)["error"] == c.error);
-  }
+  for (int ams : {0, external_left_id, external_right_id})
+    for (auto& c : cases) {
+      Fixture f;
+      c.setup(f.fake);
+      auto req = request(f.cfg);
+      req.path = "/api/v1/ams/" + std::to_string(ams) + "/trays/0/filament";
+      auto r = handle_request(req, f.service, f.cfg);
+      CHECK(r.status == c.code);
+      CHECK(json::parse(r.body)["error"] == c.error);
+    }
   for (int mismatch = 1; mismatch <= 7; ++mismatch) {
     Fixture mismatch_fixture;
     mismatch_fixture.fake.mismatch = mismatch;
@@ -293,6 +299,49 @@ void verification() {
   CHECK(j["sequenceId"].is_string());
   CHECK(j["elapsedMs"].is_number_integer());
 }
+void external() {
+  for (int ams : {external_left_id, external_right_id}) {
+    // External-only status must also establish readiness.
+    Fixture f(timing(), true, true, ams);
+    auto r = request(f.cfg);
+    r.path = "/api/v1/ams/" + std::to_string(ams) + "/trays/0/filament";
+    auto response = handle_request(r, f.service, f.cfg);
+    CHECK(response.status == 200);
+    auto j = json::parse(response.body);
+    CHECK(j["status"] == "synced");
+    CHECK(j["verified"] == true);
+    CHECK(j["amsId"] == ams);
+    CHECK(j["trayId"] == 0);
+    {
+      std::lock_guard<std::mutex> lock(f.fake.mutex);
+      CHECK(f.fake.last_command["ams_id"] == ams);
+      CHECK(f.fake.last_command["tray_id"] == 254);
+    }
+    for (int mismatch = 1; mismatch <= 7; ++mismatch) {
+      f.fake.mismatch = mismatch;
+      CHECK(handle_request(r, f.service, f.cfg).status == 504);
+    }
+    f.fake.mismatch = 8;
+    CHECK(handle_request(r, f.service, f.cfg).status == 200);
+    f.fake.mismatch = 0;
+    // Matching values from the other holder or the regular AMS tree cannot verify.
+    f.fake.external_status_id = ams == external_left_id ? external_right_id : external_left_id;
+    CHECK(handle_request(r, f.service, f.cfg).status == 504);
+    f.fake.external_status_id = -1;
+    f.fake.numeric_slot_id = true;
+    CHECK(handle_request(r, f.service, f.cfg).status == 200);
+    f.fake.numeric_slot_id = false;
+    f.fake.wrong_tray = f.fake.conflicting_legacy = true;
+    CHECK(handle_request(r, f.service, f.cfg).status == 504);
+    f.fake.wrong_tray = f.fake.conflicting_legacy = false;
+    f.fake.status_layout = 2;
+    CHECK(handle_request(r, f.service, f.cfg).status == 504);
+    f.fake.status_layout = 1;
+    CHECK(handle_request(r, f.service, f.cfg).status == (ams == external_right_id ? 200 : 504));
+  }
+  Fixture legacy(timing(), true, true, external_right_id, 1);
+  CHECK(legacy.service.set_filament(external_right_id, 0, legacy.fake.loaded).verified);
+}
 void concurrency() {
   auto t = timing();
   t.reply = 1s;
@@ -302,7 +351,8 @@ void concurrency() {
       std::async(std::launch::async, [&] { return f.service.set_filament(0, 3, f.fake.loaded); });
   f.fake.wait_write(1);
   auto second = std::async(std::launch::async, [&] {
-    return f.service.set_filament(0, 3, {"GFG99", "GFSG99_15", "PETG", "808080FF", 220, 260});
+    return f.service.set_filament(external_left_id, 0,
+                                  {"GFG99", "GFSG99_15", "PETG", "808080FF", 220, 260});
   });
   CHECK(handle_request({"GET", "/health", {}, ""}, f.service, f.cfg).status == 200);
   f.fake.hold_write = false;
@@ -317,7 +367,8 @@ void concurrency() {
   }
   f.fake.hold_write = true;
   auto interrupted = std::async(std::launch::async, [&] {
-    return f.service.set_filament(0, 3, {"GFG99", "GFSG99_15", "PETG", "808080FF", 220, 260});
+    return f.service.set_filament(external_right_id, 0,
+                                  {"GFG99", "GFSG99_15", "PETG", "808080FF", 220, 260});
   });
   f.fake.wait_write(3);
   f.fake.callbacks.connection(false);
@@ -370,7 +421,7 @@ void http() {
   auto j = json::parse(cap.body);
   CHECK(j["apiVersion"] == 1);
   CHECK(j["features"]["amsFilamentWrite"] == true);
-  CHECK(j["features"]["externalFilamentWrite"] == false);
+  CHECK(j["features"]["externalFilamentWrite"] == true);
   r.headers.clear();
   CHECK(handle_request(r, f.service, f.cfg).status == 401);
   r = request(f.cfg);
@@ -397,6 +448,19 @@ void http() {
   response = wire(server.port(), raw);
   CHECK(response.find("HTTP/1.1 200") == 0);
   CHECK(json::parse(response.substr(response.find("\r\n\r\n") + 4))["verified"] == true);
+  for (int ams : {external_left_id, external_right_id}) {
+    auto external_raw = raw;
+    auto start = external_raw.find("/ams/0/");
+    CHECK(start != std::string::npos);
+    external_raw.replace(start, std::string("/ams/0/trays/3/").size(),
+                         "/ams/" + std::to_string(ams) + "/trays/0/");
+    response = wire(server.port(), external_raw);
+    CHECK(response.find("HTTP/1.1 200") == 0);
+    auto result = json::parse(response.substr(response.find("\r\n\r\n") + 4));
+    CHECK(result["verified"] == true);
+    CHECK(result["amsId"] == ams);
+    CHECK(result["trayId"] == 0);
+  }
   server.stop();
 }
 int main(int argc, char** argv) try {
@@ -410,6 +474,8 @@ int main(int argc, char** argv) try {
     state();
   else if (suite == "verification")
     verification();
+  else if (suite == "external")
+    external();
   else if (suite == "concurrency")
     concurrency();
   else if (suite == "http")

@@ -28,7 +28,8 @@ verification from a preceding session. Queued writes recheck readiness after
 acquiring the command lock; the queue wait is bounded to one second.
 
 Readiness requires connected state and a valid `print.command=push_status` with
-AMS state or `gcode_state`, received after provisioning. Replies or malformed JSON
+AMS state, external `vir_slot`/`vt_tray` state or `gcode_state`, received after provisioning.
+Replies or malformed JSON
 cannot make a printer ready. Status older than six seconds makes `/health` 503
 immediately, even between lifecycle ticks. All lifecycle delays use interruptible
 condition variables; HTTP is started before the first connection attempt.
@@ -41,10 +42,16 @@ Verification is intentionally strict:
 3. Record status counter and receive-time boundary **after** that reply, then
    issue a fresh pushall with another unique sequence.
 4. Require post-boundary telemetry in the same session, containing the target
-   AMS/tray and exact profile, type, color, minimum and maximum temperature.
+   AMS/tray or external holder and exact profile, type, color, minimum and maximum temperature.
 5. Compare `setting_id` too when telemetry exposes it. Stock telemetry does not
    reliably echo this field; the original prototype's observable comparison is
    retained when absent. There is no cached-slot merge used for verification.
+
+External IDs 254 (left/deputy) and 255 (right/main) share the serialized command
+path. Both preserve the prototype's wire `tray_id=254`; the API response echoes
+the client's tray ID. External verification reads `vir_slot` by ID, with legacy
+`vt_tray` fallback only for ID 255. If the target exists in `vir_slot`, that entry
+is authoritative even when it mismatches and a legacy entry is also present.
 
 Late unrelated replies and pre-command/pre-verification telemetry are ignored.
 Wrong slot values, send-only success and missing telemetry cannot produce

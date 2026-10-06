@@ -200,7 +200,7 @@ HttpResponse handle_request(const HttpRequest& r, BridgeService& service, const 
                       {"backend", service.backend_name()},
                       {"pluginVersion", service.plugin_version()},
                       {"printerId", c.printer_id},
-                      {"features", {{"amsFilamentWrite", true}, {"externalFilamentWrite", false}}}}
+                      {"features", {{"amsFilamentWrite", true}, {"externalFilamentWrite", true}}}}
                      .dump()};
   std::smatch match;
   static const std::regex route("^/api/v1/ams/([^/]+)/trays/([^/]+)/filament$");
@@ -212,7 +212,7 @@ HttpResponse handle_request(const HttpRequest& r, BridgeService& service, const 
   auto input = json::parse(r.body, nullptr, false);
   if (!input.is_object()) return error_response(400, "invalid_json");
   try {
-    ams = index(match[1], 253);
+    ams = index(match[1], external_right_id);
     tray = index(match[2], 3);
     auto content = r.headers.find("content-type");
     if (content == r.headers.end() ||

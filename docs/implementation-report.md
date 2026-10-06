@@ -67,7 +67,8 @@ the remaining implementation is left for review, without a commit or push.
   interruptible, HTTP workers bounded, and shutdown joined and deterministic.
 - HTTP alone maps domain errors to status codes. No direct plugin calls from HTTP.
 - Added secret files, portable defaults, strict validation, stable errors,
-  authenticated capabilities and documented external-slot exclusion.
+  authenticated capabilities. External-slot compatibility was restored later;
+  see [compatibility](compatibility.md) for the current contract and validation scope.
 - Used one image/binary for standalone and Home Assistant. The entrypoint briefly
   initializes `/data` ownership and reads Supervisor options as root, then drops
   permanently to UID/GID 10001 with no-new-privileges before exec.
@@ -116,8 +117,10 @@ on GitHub. No registry image was published.
 - An actual Home Assistant Supervisor installation remains untested; the options
   translation and root-owned storage case were simulated in the production image.
   App installation requires release publication first.
-- External spool writes remain unsupported (`externalFilamentWrite=false`); no
-  external endpoint exists. Prototype virtual AMS IDs 254/255 are rejected.
+- External writes now retain prototype virtual AMS IDs 254/255 through the same
+  AMS endpoint (`externalFilamentWrite=true`). Fake-backend regression tests
+  cover wire encoding and fresh matching external telemetry; the restored
+  version awaits a real-printer retest. No separate external endpoint exists.
 - Stock telemetry may omit `setting_id`; the original observable comparison is
   preserved for profile/type/color/temperatures, with setting checked when echoed.
 - Synchronous calls inside a user-supplied plugin can delay deadlines/shutdown

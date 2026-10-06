@@ -3,7 +3,7 @@ info:
   title: Bambu Filament Bridge
   version: 1.0.0
   description: >-
-    API v1 for physical AMS slot metadata. HTTP 503 from health is a valid
+    API v1 for AMS and external slot metadata. HTTP 503 from health is a valid
     bridge-alive/printer-not-ready state. No inventory or Filament Manager sync.
     Service release version is independent of this API contract version.
   license:
@@ -73,13 +73,13 @@ paths:
                 printerId: EXAMPLE_DEVICE
                 features:
                   amsFilamentWrite: true
-                  externalFilamentWrite: false
+                  externalFilamentWrite: true
         '401':
           $ref: '#/components/responses/Unauthorized'
   /api/v1/ams/{amsId}/trays/{trayId}/filament:
     post:
       operationId: setAmsFilament
-      summary: Update and verify physical AMS tray metadata
+      summary: Update and verify AMS or external slot metadata
       description: >-
         Success requires send success, a success reply for this command, and fresh
         matching target-slot telemetry after that reply and a new pushall request.
@@ -88,19 +88,24 @@ paths:
         reply and verification deadlines are four seconds each. 502/504 can occur
         after printer state changed. Bodies over 65536 bytes are rejected. Headers
         are limited to 16384 bytes. Chunked transfer encoding is unsupported.
-        Reserved virtual/external IDs 254 and 255 are not accepted.
+        AMS IDs 0..253 address regular trays. External holders use virtual AMS
+        IDs 254 (left/deputy) and 255 (right/main, or the single external holder).
+        For external holders use trayId 0; the bridge preserves the prototype's
+        wire tray_id 254 and verifies vir_slot by virtual ID. Legacy vt_tray
+        telemetry can verify only ID 255. No separate external endpoint exists.
       parameters:
         - name: amsId
           in: path
           required: true
-          description: Non-negative decimal AMS ID, reserved external IDs excluded
+          description: AMS 0..253, external left/deputy 254, external right/main 255
           schema:
             type: integer
             minimum: 0
-            maximum: 253
+            maximum: 255
         - name: trayId
           in: path
           required: true
+          description: Regular tray 0..3; use 0 for external holders (0..3 accepted for compatibility)
           schema:
             type: integer
             minimum: 0
@@ -246,7 +251,7 @@ components:
               enum: [true]
             externalFilamentWrite:
               type: boolean
-              enum: [false]
+              enum: [true]
     Filament:
       type: object
       required: [profile, setting, type, color, tempMin, tempMax]

@@ -18,7 +18,32 @@ bool valid_status(const json& print) {
   if (text(print, "command") != "push_status") return false;
   return (print.contains("ams") && print["ams"].is_object() && print["ams"].contains("ams") &&
           print["ams"]["ams"].is_array()) ||
+         (print.contains("vir_slot") && print["vir_slot"].is_array()) ||
+         (print.contains("vt_tray") && print["vt_tray"].is_object()) ||
          (print.contains("gcode_state") && print["gcode_state"].is_string());
+}
+const json* target_slot(const json& print, int ams_id, int tray_id) {
+  if (is_external_slot(ams_id)) {
+    if (print.contains("vir_slot") && print["vir_slot"].is_array()) {
+      for (const auto& slot : print["vir_slot"])
+        if (slot.is_object() && text(slot, "id") == std::to_string(ams_id)) return &slot;
+    }
+    // The legacy single external slot is always the main/right slot.
+    if (ams_id == external_right_id && print.contains("vt_tray") && print["vt_tray"].is_object())
+      return &print["vt_tray"];
+    return nullptr;
+  }
+  if (!print.contains("ams") || !print["ams"].is_object() || !print["ams"].contains("ams") ||
+      !print["ams"]["ams"].is_array())
+    return nullptr;
+  for (const auto& ams : print["ams"]["ams"]) {
+    if (!ams.is_object() || text(ams, "id") != std::to_string(ams_id) || !ams.contains("tray") ||
+        !ams["tray"].is_array())
+      continue;
+    for (const auto& tray : ams["tray"])
+      if (tray.is_object() && text(tray, "id") == std::to_string(tray_id)) return &tray;
+  }
+  return nullptr;
 }
 }  // namespace
 BridgeService::BridgeService(Backend& backend, Timing timing)
@@ -105,25 +130,18 @@ void BridgeService::on_message(const std::string& message) {
         pending_.accepted = text(print, "result") == "success";
       }
       if (status && pending_.verify && status_counter_ > pending_.after &&
-          received > pending_.after_time && print.contains("ams") && print["ams"].is_object() &&
-          print["ams"].contains("ams") && print["ams"]["ams"].is_array()) {
-        for (const auto& ams : print["ams"]["ams"]) {
-          if (!ams.is_object() || text(ams, "id") != std::to_string(pending_.ams) ||
-              !ams.contains("tray") || !ams["tray"].is_array())
-            continue;
-          for (const auto& tray : ams["tray"]) {
-            if (!tray.is_object() || text(tray, "id") != std::to_string(pending_.tray)) continue;
-            const auto& f = pending_.expected;
-            // Stock telemetry does not reliably echo setting_id. Preserve the
-            // prototype's physical-slot comparison; compare it when supplied.
-            bool matches = text(tray, "tray_info_idx") == f.profile &&
-                           text(tray, "tray_type") == f.type &&
-                           text(tray, "tray_color") == f.color &&
-                           text(tray, "nozzle_temp_min") == std::to_string(f.temp_min) &&
-                           text(tray, "nozzle_temp_max") == std::to_string(f.temp_max) &&
-                           (!tray.contains("setting_id") || text(tray, "setting_id") == f.setting);
-            pending_.matches = pending_.matches || matches;
-          }
+          received > pending_.after_time) {
+        if (const auto* slot = target_slot(print, pending_.ams, pending_.tray)) {
+          const auto& tray = *slot;
+          const auto& f = pending_.expected;
+          // Stock telemetry does not reliably echo setting_id. Preserve the
+          // prototype's physical-slot comparison; compare it when supplied.
+          bool matches = text(tray, "tray_info_idx") == f.profile &&
+                         text(tray, "tray_type") == f.type && text(tray, "tray_color") == f.color &&
+                         text(tray, "nozzle_temp_min") == std::to_string(f.temp_min) &&
+                         text(tray, "nozzle_temp_max") == std::to_string(f.temp_max) &&
+                         (!tray.contains("setting_id") || text(tray, "setting_id") == f.setting);
+          pending_.matches = pending_.matches || matches;
         }
       }
     }
@@ -302,7 +320,8 @@ WriteResult BridgeService::set_filament(int ams, int tray, const Filament& f) {
                 {{"sequence_id", result.sequence_id},
                  {"command", "ams_filament_setting"},
                  {"ams_id", ams},
-                 {"tray_id", tray},
+                 // Preserve the prototype's external-slot wire encoding for both holders.
+                 {"tray_id", is_external_slot(ams) ? external_left_id : tray},
                  {"tray_info_idx", f.profile},
                  {"setting_id", f.setting},
                  {"tray_color", f.color},

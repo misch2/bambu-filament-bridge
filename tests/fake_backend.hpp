@@ -18,6 +18,9 @@ class FakeBackend : public Backend {
   std::atomic<bool> pre_reply_only{false}, hold_write{false}, wrong_sequence{false};
   std::atomic<bool> emit_certificate{true}, require_certificate{true};
   std::atomic<int> mismatch{0};
+  // 0: native shape (AMS or vir_slot), 1: legacy vt_tray, 2: AMS-shaped telemetry.
+  std::atomic<int> status_layout{0}, external_status_id{-1};
+  std::atomic<bool> conflicting_legacy{false}, numeric_slot_id{false};
   std::atomic<int> connects{0}, sends{0}, writes{0}, overlapping{0};
   std::mutex mutex;
   std::condition_variable cv;
@@ -52,7 +55,8 @@ class FakeBackend : public Backend {
       std::lock_guard<std::mutex> lock(mutex);
       f = loaded;
     }
-    json slot{{"id", std::to_string(tray.load())},
+    const int slot_id = is_external_slot(ams) ? ams.load() : tray.load();
+    json slot{{"id", std::to_string(slot_id)},
               {"tray_info_idx", wrong_tray ? "wrong" : f.profile},
               {"tray_type", f.type},
               {"tray_color", f.color},
@@ -87,12 +91,27 @@ class FakeBackend : public Backend {
       default:
         break;
     }
-    callbacks.message(json{{"print",
-                            {{"command", "push_status"},
-                             {"ams",
-                              {{"ams", json::array({{{"id", std::to_string(ams.load())},
-                                                     {"tray", json::array({slot})}}})}}}}}}
-                          .dump());
+    json print{{"command", "push_status"}};
+    if (status_layout == 1) {
+      slot.erase("id");
+      print["vt_tray"] = slot;
+    } else if (is_external_slot(ams) && status_layout != 2) {
+      if (external_status_id >= 0) slot["id"] = external_status_id.load();
+      if (numeric_slot_id) slot["id"] = slot_id;
+      auto other = slot;
+      other["id"] = ams == external_left_id ? external_right_id : external_left_id;
+      other["tray_info_idx"] = "other-holder";
+      // Include both holders, with the unrelated one first.
+      print["vir_slot"] = json::array({other, slot});
+      if (conflicting_legacy) {
+        print["vt_tray"] = slot;
+        print["vt_tray"]["tray_info_idx"] = f.profile;
+      }
+    } else {
+      print["ams"] = {{"ams", json::array({{{"id", std::to_string(ams.load())},
+                                            {"tray", json::array({slot})}}})}};
+    }
+    callbacks.message(json{{"print", print}}.dump());
   }
   void reply() {
     json command;

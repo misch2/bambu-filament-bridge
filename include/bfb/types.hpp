@@ -3,6 +3,11 @@
 #include <chrono>
 #include <string>
 namespace bfb {
+constexpr int external_left_id = 254;
+constexpr int external_right_id = 255;
+inline bool is_external_slot(int ams_id) {
+  return ams_id == external_left_id || ams_id == external_right_id;
+}
 using Clock = std::chrono::steady_clock;
 struct Filament {
   std::string profile, setting, type, color;

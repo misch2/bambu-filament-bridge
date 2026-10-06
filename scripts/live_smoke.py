@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Opt-in real-printer check. --write-json changes the selected AMS tray."""
+"""Opt-in real-printer check. --write-json changes the selected AMS tray or external holder."""
 import argparse
 import json
 import os
@@ -44,11 +44,14 @@ def main():
         raise RuntimeError("Unexpected API version")
     print(f"Health HTTP {status}; ready={health['ready']}; capabilities OK")
     if args.write_json:
-        if args.ams is None or args.tray is None or not (0 <= args.ams <= 253 and 0 <= args.tray <= 3):
-            parser.error("write mode requires --ams 0..253 and --tray 0..3")
+        if args.ams is None or args.tray is None or not (0 <= args.ams <= 255 and 0 <= args.tray <= 3):
+            parser.error(
+                "write mode requires --ams 0..255 and --tray 0..3 "
+                "(external: --ams 254/255 --tray 0)"
+            )
         if not health["ready"]:
             raise RuntimeError("Printer is not ready; no write attempted")
-        print("Changing selected physical AMS tray metadata")
+        print("Changing selected AMS tray or external holder metadata")
         payload = json.loads(args.write_json.read_text(encoding="utf-8"))
         _, result = call(f"/api/v1/ams/{args.ams}/trays/{args.tray}/filament", payload)
         if result.get("status") != "synced" or result.get("verified") is not True:

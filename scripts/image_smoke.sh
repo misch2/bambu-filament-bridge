@@ -27,7 +27,7 @@ code=$(curl -s --max-time 3 -o /tmp/cap.json -w '%{http_code}' http://127.0.0.1:
 code=$(curl -s --max-time 3 -H "Authorization: Bearer $BAMBU_HTTP_TOKEN" \
     -o /tmp/cap.json -w '%{http_code}' http://127.0.0.1:8080/api/v1/capabilities)
 [ "$code" = 200 ]
-jq -e '.apiVersion == 1 and .backend == "open-bamboo-networking" and .features.amsFilamentWrite == true and .features.externalFilamentWrite == false' /tmp/cap.json >/dev/null
+jq -e '.apiVersion == 1 and .backend == "open-bamboo-networking" and .features.amsFilamentWrite == true and .features.externalFilamentWrite == true' /tmp/cap.json >/dev/null
 code=$(curl -s --max-time 3 -H "Authorization: Bearer $BAMBU_HTTP_TOKEN" \
     -H 'Content-Type: application/json' \
     --data '{"profile":"TEST_PROFILE","setting":"TEST_SETTING","type":"PETG","color":"808080FF","tempMin":220,"tempMax":260}' \
