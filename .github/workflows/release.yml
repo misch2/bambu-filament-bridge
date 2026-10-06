@@ -15,20 +15,21 @@ jobs:
         with:
           submodules: true
           fetch-depth: 0
-      - name: Require stable semver tag on default branch
+      - name: Require stable or experimental semver tag on default branch
         env:
           TAG: ${{ github.ref_name }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           OWNER: ${{ github.repository_owner }}
         run: |
-          [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-experimental)?$ ]]
           git fetch origin "$DEFAULT_BRANCH"
           git merge-base --is-ancestor HEAD "origin/$DEFAULT_BRANCH"
           echo "IMAGE=ghcr.io/${OWNER,,}/bambu-filament-bridge" >> "$GITHUB_ENV"
           echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
       - name: Require packaging versions to match tag
         run: |
-          grep -F "VERSION $VERSION LANGUAGES" CMakeLists.txt
+          grep -F "VERSION ${VERSION%%-*} LANGUAGES" CMakeLists.txt
+          grep -F "set(BFB_VERSION \"$VERSION\")" CMakeLists.txt
           grep -F "version: \"$VERSION\"" home-assistant/bambu_filament_bridge/config.yaml
           grep -F "io.hass.version=\"$VERSION\"" Dockerfile
           grep -F "version=$VERSION backend=" src/main.cpp
@@ -43,11 +44,11 @@ jobs:
         id: meta
         with:
           images: ${{ env.IMAGE }}
-          flavor: latest=true
+          flavor: latest=${{ !contains(env.VERSION, '-') }}
           tags: |
-            type=semver,pattern=v{{version}}
+            type=semver,pattern={{version}},prefix=v
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ !contains(env.VERSION, '-') }}
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .

@@ -1,6 +1,9 @@
 # Version bump
 
-Use an unused stable `X.Y.Z` version (no prerelease suffix). The example below
+Use an unused stable `X.Y.Z` version unless an experimental release is explicitly
+requested. Experimental releases use `X.Y.Z-experimental` and publish only their
+full version tags, without updating `latest` or the stable major/minor tag.
+The example below
 releases **0.1.2**; replace it everywhere with the intended version. Commands
 assume the default branch is `main`.
 
@@ -20,6 +23,12 @@ assume the default branch is `main`.
    | `home-assistant/bambu_filament_bridge/config.yaml` | `version: "0.1.2"` |
    | `Dockerfile` | `io.hass.version="0.1.2"` |
    | `src/main.cpp` | Startup log `version=0.1.2 backend=` |
+
+   Also set `BFB_VERSION` in `CMakeLists.txt` to the full release version.
+   CMake's `project(... VERSION ...)` remains numeric: for
+   `0.1.5-experimental`, use project version `0.1.5` and
+   `set(BFB_VERSION "0.1.5-experimental")`. The contract and release checks
+   validate both values.
 
 3. In `home-assistant/bambu_filament_bridge/CHANGELOG.md`, rename the existing
    `# Unreleased` heading to `# 0.1.2`, keep its entries as the release notes,

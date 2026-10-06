@@ -164,6 +164,8 @@ ghcr.io/misch2/bambu-filament-bridge
 ```
 
 For production installations, prefer a versioned tag instead of `latest`.
+The current experimental build is `0.1.5-experimental`; its external-holder
+protocol fixes still require live X2D validation.
 
 ---
 

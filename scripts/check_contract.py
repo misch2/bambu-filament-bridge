@@ -44,8 +44,11 @@ def main():
     require({"type": "app_config", "read_only": True, "path": "/config"} in addon["map"],
             "App certificate mount missing")
     version = addon["version"]
-    require(f"VERSION {version} LANGUAGES" in (ROOT / "CMakeLists.txt").read_text(), "CMake/App version mismatch")
+    cmake = (ROOT / "CMakeLists.txt").read_text()
+    require(f"VERSION {version.split('-')[0]} LANGUAGES" in cmake, "CMake/App numeric version mismatch")
+    require(f'set(BFB_VERSION "{version}")' in cmake, "CMake/App release version mismatch")
     require(f'io.hass.version="{version}"' in (ROOT / "Dockerfile").read_text(), "Image/App version mismatch")
+    require(f"version={version} backend=" in (ROOT / "src/main.cpp").read_text(), "Startup/App version mismatch")
     for path in (ROOT / ".github/workflows").glob("*.yml"):
         workflow = yaml.safe_load(path.read_text())
         # PyYAML's YAML 1.1 parser treats the 'on' key as boolean True.

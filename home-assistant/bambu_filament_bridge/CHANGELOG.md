@@ -1,5 +1,12 @@
 # Unreleased
 
+# 0.1.5-experimental
+
+- Audit filament-setting commands and replies against current Bambu Studio; add complete golden wire commands.
+- Decode packed virtual-slot IDs and use legacy vt_tray only when vir_slot is absent.
+- Add ACK, metadata and telemetry regression coverage and errno diagnostics.
+- External-holder writes still require live X2D validation of physical metadata changes.
+
 # 0.1.4
 
 - Restore external slot_id=0 and include slot_id equal to tray_id for normal AMS commands.
