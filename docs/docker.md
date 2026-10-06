@@ -38,7 +38,7 @@ For Docker secrets, remove the direct secret environment variables and use:
 ```yaml
 services:
   bridge:
-    image: ghcr.io/misch2/bambu-filament-bridge:0.1.1
+    image: ghcr.io/misch2/bambu-filament-bridge:0.1.2
     environment:
       BAMBU_DEV_ID: ${BAMBU_DEV_ID}
       BAMBU_DEV_IP: ${BAMBU_DEV_IP}

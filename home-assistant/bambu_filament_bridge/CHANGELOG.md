@@ -1,5 +1,7 @@
 # Unreleased
 
+# 0.1.2
+
 - Start without manual certificate copying by default; add optional printer TLS verification.
 - Import user-supplied printer certificates from the App configuration directory.
 - Preserve other plugin settings and run the bridge as the existing non-root user.
