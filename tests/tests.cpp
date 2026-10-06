@@ -265,6 +265,7 @@ void verification() {
       {"printer_rejected", 502, [](auto& b) { b.reject = true; }},
       {"printer_reply_timeout", 504, [](auto& b) { b.no_reply = true; }},
       {"printer_reply_timeout", 504, [](auto& b) { b.wrong_sequence = true; }},
+      {"printer_reply_timeout", 504, [](auto& b) { b.wrong_command = true; }},
       {"verification_request_failed", 502, [](auto& b) { b.fail_verify = true; }},
       {"verification_timeout", 504, [](auto& b) { b.telemetry = false; }},
       {"verification_timeout", 504, [](auto& b) { b.wrong_tray = true; }},
@@ -290,7 +291,7 @@ void verification() {
       CHECK(r.status == c.code);
       CHECK(json::parse(r.body)["error"] == c.error);
     }
-  for (int mismatch = 1; mismatch <= 7; ++mismatch) {
+  for (int mismatch : {1, 2, 3, 4, 5, 6, 7, 9, 10, 11}) {
     Fixture mismatch_fixture;
     mismatch_fixture.fake.mismatch = mismatch;
     CHECK(mismatch_fixture.service.set_filament(0, 3, mismatch_fixture.fake.loaded).error ==
@@ -346,7 +347,7 @@ void external() {
     f.fake.omit_result = true;
     CHECK(handle_request(r, f.service, f.cfg).status == 200);
     f.fake.omit_result = false;
-    for (int mismatch = 1; mismatch <= 7; ++mismatch) {
+    for (int mismatch : {1, 2, 3, 4, 5, 6, 7, 9, 10, 11}) {
       f.fake.mismatch = mismatch;
       CHECK(handle_request(r, f.service, f.cfg).status == 504);
     }
@@ -360,9 +361,18 @@ void external() {
     f.fake.numeric_slot_id = true;
     CHECK(handle_request(r, f.service, f.cfg).status == 200);
     f.fake.numeric_slot_id = false;
+    f.fake.packed_slot_id = true;
+    CHECK(handle_request(r, f.service, f.cfg).status == 200);
+    f.fake.packed_slot_id = false;
     f.fake.wrong_tray = f.fake.conflicting_legacy = true;
     CHECK(handle_request(r, f.service, f.cfg).status == 504);
     f.fake.wrong_tray = f.fake.conflicting_legacy = false;
+    // A missing target in vir_slot must not fall back to matching legacy metadata.
+    f.fake.external_status_id = ams == external_left_id ? external_right_id : external_left_id;
+    f.fake.conflicting_legacy = true;
+    CHECK(handle_request(r, f.service, f.cfg).status == 504);
+    f.fake.external_status_id = -1;
+    f.fake.conflicting_legacy = false;
     f.fake.status_layout = 2;
     CHECK(handle_request(r, f.service, f.cfg).status == 504);
     f.fake.status_layout = 1;
@@ -370,6 +380,37 @@ void external() {
   }
   Fixture legacy(timing(), true, true, external_right_id, 1);
   CHECK(legacy.service.set_filament(external_right_id, 0, legacy.fake.loaded).verified);
+}
+void protocol() {
+  // Golden single-color commands: Bambu Studio command_ams_filament_settings,
+  // da8b44ee34dd349f2ae0df3f1cbae366df482354, DeviceManager.cpp:1691-1722.
+  struct Address {
+    int ams, tray, slot, wire_tray;
+  };
+  for (const auto address :
+       {Address{0, 2, 2, 2}, Address{254, 0, 0, 254}, Address{255, 0, 0, 254}}) {
+    for (bool omit_result : {false, true}) {
+      Fixture f;
+      f.fake.omit_result = omit_result;
+      const Filament filament{"GFL99", "GFSL99_17", "PLA", "FFCF98FF", 190, 240};
+      const auto result = f.service.set_filament(address.ams, address.tray, filament);
+      CHECK(result.verified);
+      const json expected{{"command", "ams_filament_setting"},
+                          {"sequence_id", result.sequence_id},
+                          {"ams_id", address.ams},
+                          {"slot_id", address.slot},
+                          {"tray_id", address.wire_tray},
+                          {"tray_info_idx", "GFL99"},
+                          {"setting_id", "GFSL99_17"},
+                          {"tray_color", "FFCF98FF"},
+                          {"nozzle_temp_min", 190},
+                          {"nozzle_temp_max", 240},
+                          {"tray_type", "PLA"}};
+      std::lock_guard<std::mutex> lock(f.fake.mutex);
+      CHECK(f.fake.last_command == expected);
+      CHECK(!result.sequence_id.empty());
+    }
+  }
 }
 class LogCapture {
  public:
@@ -493,7 +534,8 @@ void logging() {
       } else if (event["result"] == "fail") {
         CHECK(event["accepted"] == false);
         CHECK(event["reason"] == "test rejection");
-        CHECK(event["err_code"] == 42);
+        CHECK(event["errCode"] == 42);
+        CHECK(event["errno"] == 7);
         saw_rejected_reply = true;
       }
     }
@@ -656,6 +698,8 @@ int main(int argc, char** argv) try {
     verification();
   else if (suite == "external")
     external();
+  else if (suite == "protocol")
+    protocol();
   else if (suite == "logging")
     logging();
   else if (suite == "concurrency")

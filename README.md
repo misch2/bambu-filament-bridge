@@ -387,12 +387,15 @@ curl --fail-with-body -X POST "$BAMBU_BRIDGE_URL/api/v1/ams/254/trays/0/filament
 ```
 
 Use ID 255 for the right holder. Capabilities reports `externalFilamentWrite=true`.
+This denotes the implemented, fake-backend-tested path; the corrected command still
+requires live X2D validation of physical metadata changes on both holders.
 Success requires a matching command/sequence ACK without explicit `result=fail`
 (the printer may omit `result`) and fresh matching holder telemetry after a new
 post-ACK pushall. The ACK alone never produces `verified=true`.
 Commands include `slot_id`: the tray index for normal AMS, or 0 for external
 holders (both retain wire `tray_id=254`).
-see [compatibility and validation scope](docs/compatibility.md).
+See [compatibility and validation scope](docs/compatibility.md) and the
+[Bambu Studio protocol audit](docs/ams-filament-protocol.md).
 
 ---
 

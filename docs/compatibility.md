@@ -20,13 +20,18 @@ use the same AMS endpoint with tray ID 0. The wire command uses `tray_id=254`
 for either holder; the response retains the client's tray ID. IDs 0..3 remain
 accepted for compatibility, but do not select different external holders.
 
-Verification selects the matching ID from fresh `print.vir_slot` telemetry.
-Legacy `print.vt_tray` can verify only ID 255. A reply, stale status, the other
+Verification selects the matching ID from fresh `print.vir_slot` telemetry,
+including Studio's packed AMS/slot ID form. When `vir_slot` is present its array
+is authoritative, even if the requested holder is absent.
+Legacy `print.vt_tray` can verify only ID 255 when `vir_slot` is absent. A reply, stale status, the other
 holder, or an AMS-shaped entry with ID 254/255 cannot verify an external write.
 Capabilities reports `externalFilamentWrite=true` for this implemented and
 regression-tested path; no separate `/external` endpoint is provided.
 
-The owner reports reliable writes to both X2D external holders with the original
-prototype at `129e4d2`. Commit `786c24f` removed that behavior; it is now restored
-with fake-backend regression coverage. The restored version has not yet been
-retested on a real printer, and other printer/firmware combinations are untested.
+The original prototype at `129e4d2` also omitted `slot_id`; historical reports
+of working writes do not validate the corrected protocol on current X2D firmware.
+The v0.1.3 hardware report showed a reply timeout and unchanged external metadata.
+The corrected path follows [the Bambu Studio protocol audit](ams-filament-protocol.md)
+and has fake-backend regression coverage, but still requires live X2D validation
+of physical metadata changes on both holders. Other printer/firmware combinations
+remain untested.

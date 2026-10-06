@@ -16,12 +16,13 @@ class FakeBackend : public Backend {
   std::atomic<bool> auto_connect{true}, telemetry{true}, fail_send{false}, reject{false};
   std::atomic<bool> no_reply{false}, wrong_tray{false}, fail_verify{false}, disconnect_write{false};
   std::atomic<bool> omit_result{false};
-  std::atomic<bool> pre_reply_only{false}, hold_write{false}, wrong_sequence{false};
+  std::atomic<bool> pre_reply_only{false}, hold_write{false}, wrong_sequence{false},
+      wrong_command{false};
   std::atomic<bool> emit_certificate{true}, require_certificate{true};
   std::atomic<int> mismatch{0};
   // 0: native shape (AMS or vir_slot), 1: legacy vt_tray, 2: AMS-shaped telemetry.
   std::atomic<int> status_layout{0}, external_status_id{-1};
-  std::atomic<bool> conflicting_legacy{false}, numeric_slot_id{false};
+  std::atomic<bool> conflicting_legacy{false}, numeric_slot_id{false}, packed_slot_id{false};
   std::atomic<int> connects{0}, sends{0}, writes{0}, overlapping{0};
   std::mutex mutex;
   std::condition_variable cv;
@@ -89,6 +90,15 @@ class FakeBackend : public Backend {
       case 8:
         slot.erase("setting_id");
         break;
+      case 9:
+        slot["setting_id"] = json::object();
+        break;
+      case 10:
+        slot.erase("tray_info_idx");
+        break;
+      case 11:
+        slot.erase("nozzle_temp_min");
+        break;
       default:
         break;
     }
@@ -99,6 +109,7 @@ class FakeBackend : public Backend {
     } else if (is_external_slot(ams) && status_layout != 2) {
       if (external_status_id >= 0) slot["id"] = external_status_id.load();
       if (numeric_slot_id) slot["id"] = slot_id;
+      if (packed_slot_id) slot["id"] = std::to_string(slot_id << 8);
       auto other = slot;
       other["id"] = ams == external_left_id ? external_right_id : external_left_id;
       other["tray_info_idx"] = "other-holder";
@@ -120,15 +131,16 @@ class FakeBackend : public Backend {
       std::lock_guard<std::mutex> lock(mutex);
       command = last_command;
     }
-    json response{{"print",
-                   {{"command", "ams_filament_setting"},
-                    {"sequence_id",
-                     wrong_sequence ? "unrelated" : command.at("sequence_id").get<std::string>()},
-                    {"result", reject ? "fail" : "success"}}}};
+    // Echo the response metadata Studio consumes; it is not verification telemetry.
+    json response{{"print", command}};
+    response["print"]["command"] = wrong_command ? "unrelated" : "ams_filament_setting";
+    if (wrong_sequence) response["print"]["sequence_id"] = "unrelated";
+    response["print"]["result"] = reject ? "fail" : "success";
     if (omit_result) response["print"].erase("result");
     if (reject) {
       response["print"]["reason"] = "test rejection";
       response["print"]["err_code"] = 42;
+      response["print"]["errno"] = 7;
       response["print"]["private_extra"] = "UNLOGGED_REPLY_PAYLOAD";
     }
     callbacks.message(response.dump());

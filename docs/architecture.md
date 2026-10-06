@@ -52,8 +52,9 @@ External IDs 254 (left/deputy) and 255 (right/main) share the serialized command
 path. Both use wire `slot_id=0` and `tray_id=254`; normal AMS commands include
 `slot_id=tray_id`. The API response echoes
 the client's tray ID. External verification reads `vir_slot` by ID, with legacy
-`vt_tray` fallback only for ID 255. If the target exists in `vir_slot`, that entry
-is authoritative even when it mismatches and a legacy entry is also present.
+`vt_tray` fallback only for ID 255 when `vir_slot` is absent. The `vir_slot` array
+is authoritative even when the target is absent or mismatches. Packed virtual IDs
+are decoded using Bambu Studio's high-byte plus low-byte rule.
 
 Late unrelated replies and pre-command/pre-verification telemetry are ignored.
 Wrong slot values, send-only success and missing telemetry cannot produce

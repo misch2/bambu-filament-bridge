@@ -94,7 +94,10 @@ paths:
         For external holders use trayId 0; the bridge preserves the prototype's
         wire tray_id 254 with slot_id 0 and verifies vir_slot by virtual ID.
         Normal AMS commands use slot_id equal to tray_id. Legacy vt_tray
-        telemetry can verify only ID 255. No separate external endpoint exists.
+        telemetry can verify only ID 255 when vir_slot is absent. Capabilities
+        advertises the implemented, regression-tested external path; live X2D
+        validation of the corrected command is still pending.
+        No separate external endpoint exists.
       parameters:
         - name: amsId
           in: path

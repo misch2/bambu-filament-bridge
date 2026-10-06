@@ -2,6 +2,7 @@
 #include "bfb/bridge_service.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <iostream>
 #include <stdexcept>
 
@@ -27,8 +28,19 @@ bool valid_status(const json& print) {
 const json* target_slot(const json& print, int ams_id, int tray_id) {
   if (is_external_slot(ams_id)) {
     if (print.contains("vir_slot") && print["vir_slot"].is_array()) {
-      for (const auto& slot : print["vir_slot"])
-        if (slot.is_object() && text(slot, "id") == std::to_string(ams_id)) return &slot;
+      for (const auto& slot : print["vir_slot"]) {
+        if (!slot.is_object()) continue;
+        const auto id = text(slot, "id");
+        unsigned int value = 0;
+        const auto parsed = std::from_chars(id.data(), id.data() + id.size(), value);
+        if (parsed.ec != std::errc{} || parsed.ptr != id.data() + id.size() || value > 65535)
+          continue;
+        // Bambu Studio parse_vt_tray decodes packed AMS/slot IDs as high byte + low byte.
+        if (value > 255) value = (value >> 8) + (value & 0xff);
+        if (value == static_cast<unsigned int>(ams_id)) return &slot;
+      }
+      // Studio uses vt_tray only when vir_slot is absent, never for a missing dual slot.
+      return nullptr;
     }
     // The legacy single external slot is always the main/right slot.
     if (ams_id == external_right_id && print.contains("vt_tray") && print["vt_tray"].is_object())
@@ -134,14 +146,14 @@ void BridgeService::on_message(const std::string& message) {
                     {"reply_received", true},
                     {"accepted", pending_.accepted}};
         // Only bounded scalar diagnostics are logged, never nested printer payloads.
-        for (const auto* field : {"result", "reason", "err_code"}) {
-          if (std::string(field) != "result" && pending_.accepted) continue;
+        for (const auto* field : {"result", "reason", "err_code", "errno"}) {
           auto value = print.find(field);
           if (value == print.end()) continue;
           if (value->is_string())
-            detail[field] = value->get<std::string>().substr(0, 256);
+            detail[std::string(field) == "err_code" ? "errCode" : field] =
+                value->get<std::string>().substr(0, 256);
           else if (value->is_number() || value->is_boolean() || value->is_null())
-            detail[field] = *value;
+            detail[std::string(field) == "err_code" ? "errCode" : field] = *value;
         }
         operational_log("command", detail);
       }
@@ -359,13 +371,18 @@ WriteResult BridgeService::set_filament(int ams, int tray, const Filament& f) {
     pending_.expected = f;
     pending_.epoch = epoch_;
   }
+  const bool external = is_external_slot(ams);
+  const int wire_ams_id = ams;
+  const int wire_slot_id = external ? 0 : tray;
+  // Bambu Studio uses tray_id 254 for both virtual external holders.
+  // ams_id 254/255 identifies deputy/main; slot_id remains 0.
+  const int wire_tray_id = external ? external_left_id : tray;
   json payload{{"print",
                 {{"sequence_id", result.sequence_id},
                  {"command", "ams_filament_setting"},
-                 {"ams_id", ams},
-                 {"slot_id", is_external_slot(ams) ? 0 : tray},
-                 // Preserve the prototype's external-slot wire encoding for both holders.
-                 {"tray_id", is_external_slot(ams) ? external_left_id : tray},
+                 {"ams_id", wire_ams_id},
+                 {"slot_id", wire_slot_id},
+                 {"tray_id", wire_tray_id},
                  {"tray_info_idx", f.profile},
                  {"setting_id", f.setting},
                  {"tray_color", f.color},
@@ -376,9 +393,9 @@ WriteResult BridgeService::set_filament(int ams, int tray, const Filament& f) {
                               {"sequenceId", result.sequence_id},
                               {"amsId", ams},
                               {"trayId", tray},
-                              {"wireAmsId", ams},
-                              {"wireSlotId", is_external_slot(ams) ? 0 : tray},
-                              {"wireTrayId", is_external_slot(ams) ? external_left_id : tray},
+                              {"wireAmsId", wire_ams_id},
+                              {"wireSlotId", wire_slot_id},
+                              {"wireTrayId", wire_tray_id},
                               {"replyTimeoutMs", timing_.reply.count()},
                               {"verificationTimeoutMs", timing_.verification.count()}});
   try {
