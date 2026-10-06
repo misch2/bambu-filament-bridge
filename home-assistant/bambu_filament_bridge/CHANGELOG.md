@@ -1,5 +1,12 @@
 # Unreleased
 
+# 0.1.7-experimental
+
+- Add authenticated DELETE to clear AMS tray or external holder filament metadata using the existing ams_filament_setting command.
+- Require a matching accepted ACK and fresh cleared target telemetry; preserve POST verification and serialize SET/CLEAR operations.
+- Add reset golden payloads for AMS and both X2D external holders, regression tests, API documentation and explicit opt-in live clear smoke support.
+- Clearing stale metadata on the real X2D LCD still requires live validation; no PA/flow calibration cleanup is performed.
+
 # 0.1.6
 
 - Promote the filament protocol fix after the owner reported 0.1.5-experimental working on the live X2D.
