@@ -195,7 +195,9 @@ paths:
         and zero temperatures. Verification requires the target's profile, type and setting
         to be absent or empty and temperatures absent, empty or zero. Color is ignored.
         This clears slot metadata only; no PA/flow calibration commands are sent.
-        LCD behavior still requires live X2D validation. Errors may occur after metadata changed.
+        The owner confirmed CLEAR working on the live X2D with 0.1.7-experimental;
+        specific slot coverage was not supplied. Other printer/firmware combinations
+        remain untested. Errors may occur after metadata changed.
       parameters:
         - name: amsId
           in: path

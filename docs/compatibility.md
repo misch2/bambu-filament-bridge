@@ -39,4 +39,4 @@ no new agent-operated live test was performed. Complete wire commands are locked
 in [golden fixtures](../tests/golden/README.md). Other printer/firmware combinations
 remain untested.
 
-Metadata CLEAR (DELETE), including external IDs 254/255, is implemented and fake-backend tested. Live X2D LCD reset behavior remains untested; existing SET hardware results do not establish CLEAR compatibility.
+Metadata CLEAR (DELETE), including external IDs 254/255, is implemented and fake-backend tested. The owner confirmed `0.1.7-experimental` working on the live X2D and requested stable `0.1.8`. This is owner-reported CLEAR validation; specific slot coverage was not supplied. Other printer/firmware combinations remain untested; no agent-operated live test was performed.

@@ -1,5 +1,11 @@
 # Unreleased
 
+# 0.1.8
+
+- Promote verified filament metadata clearing to stable after the owner confirmed 0.1.7-experimental working on the live X2D.
+- Preserve the authenticated DELETE API, matching-ACK plus fresh-target verification, existing POST behavior and SET/CLEAR serialization.
+- Update packaging versions, image examples and compatibility documentation; no printer protocol changes.
+
 # 0.1.7-experimental
 
 - Add authenticated DELETE to clear AMS tray or external holder filament metadata using the existing ams_filament_setting command.

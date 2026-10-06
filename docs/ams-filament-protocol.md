@@ -145,4 +145,6 @@ CLEAR. Profile, type and setting must be absent or empty strings; temperatures
 must be absent, empty strings, numeric zero or string "0". Malformed values fail
 verification. Color is ignored because firmware can normalize it. Existing SET
 comparison and external telemetry mapping are preserved. No calibration commands
-are added. Real X2D LCD behavior remains untested for CLEAR.
+are added. The owner confirmed `0.1.7-experimental` working on the live X2D and requested
+stable `0.1.8`. This is owner-reported CLEAR validation; specific slot coverage
+was not supplied. No agent-operated live test was performed.

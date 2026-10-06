@@ -173,8 +173,9 @@ ghcr.io/misch2/bambu-filament-bridge
 ```
 
 For production installations, prefer a versioned tag instead of `latest`.
-The current experimental release is `0.1.7-experimental`, adding verified metadata
-clearing via DELETE. The current stable release remains `0.1.6`. The owner reported the preceding
+The current stable release is `0.1.8`, including verified metadata clearing via
+DELETE after the owner confirmed `0.1.7-experimental` working on the live X2D.
+The owner also reported the preceding
 `0.1.5-experimental` protocol fix working on the live X2D.
 
 ---
@@ -442,7 +443,9 @@ post-reply target telemetry confirming cleared metadata. Existing POST behavior 
 Errors use the existing 400/401/502/503/504 model; oversized requests remain 413.
 A timeout can occur after the printer has changed the slot.
 No PA/flow calibration selection cleanup is performed. Fake-backend coverage is
-complete; removal of stale metadata on the real X2D LCD remains to be validated.
+complete. The owner confirmed `0.1.7-experimental` working on the live X2D and
+requested stable `0.1.8`. This is owner-reported validation; specific slot coverage
+was not supplied, and other printer/firmware combinations remain untested.
 
 Optional live check: set `BFB_LIVE_TEST=1` and run `scripts/live_smoke.py --clear
 --ams 254 --tray 0` with your bridge URL/token environment. This changes the selected

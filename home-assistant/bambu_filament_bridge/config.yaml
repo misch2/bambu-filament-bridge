@@ -1,5 +1,5 @@
 name: Bambu Filament Bridge
-version: "0.1.7-experimental"
+version: "0.1.8"
 slug: bambu_filament_bridge
 description: Verified AMS filament updates via authenticated HTTP API; requires printer Developer Mode
 url: https://github.com/misch2/bambu-filament-bridge
