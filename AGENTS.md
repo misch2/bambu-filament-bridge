@@ -755,6 +755,9 @@ Its job is reliable, authenticated, verified filament-slot metadata updates.
 
 ## CI
 
+For version bumps and releases, follow [VERSION_BUMP.md](./VERSION_BUMP.md),
+including version alignment, validation, and the final Git tag push.
+
 GitHub Actions should run:
 
 1. CMake configure/build
