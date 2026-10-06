@@ -11,11 +11,20 @@ AMS tray or external holder in the printer as well. Bambu Studio then sees the s
 color and profile that your inventory system says is loaded.
 
 ```mermaid
-flowchart LR
-  Spoolman[Spoolman] --> SpoolmanSync[SpoolmanSync]
-  SpoolmanSync -->|HTTP| Bridge[Bambu Filament Bridge]
-  Bridge --> Printer[Bambu printer]
-  Printer --> Studio[Bambu Studio]
+flowchart TD
+  Spoolman[Spoolman]
+  SpoolmanSync[SpoolmanSync]
+  Bridge["Bambu Filament<br/>Bridge"]
+  Printer[Bambu printer]
+  Studio[Bambu Studio]
+
+  Spoolman <-->|Spoolman API| SpoolmanSync
+  SpoolmanSync <-->|HTTP API<br/>Bearer token| Bridge
+  Bridge <-->|Bambu MQTT over TLS<br/>LAN| Printer
+  Printer <-->|Bambu protocol| Studio
+
+  classDef bridge fill:#ffd166,stroke:#d97706,stroke-width:4px,color:#111,font-weight:bold;
+  class Bridge bridge;
 ```
 
 ## What it does
