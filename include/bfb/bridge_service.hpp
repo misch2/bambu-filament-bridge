@@ -40,6 +40,9 @@ class BridgeService {
   unsigned long long sequence_ = 20000, status_counter_ = 0, epoch_ = 0;
   struct Pending {
     bool active = false, reply = false, accepted = false, verify = false, matches = false;
+    unsigned long long fresh_statuses = 0;
+    bool target_seen = false;
+    std::string mismatched_fields;
     std::string sequence;
     int ams = 0, tray = 0;
     Filament expected;

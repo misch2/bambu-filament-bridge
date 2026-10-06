@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <iostream>
 #include <stdexcept>
+
+#include "bfb/log.hpp"
 namespace bfb {
 using json = nlohmann::json;
 namespace {
@@ -131,17 +133,27 @@ void BridgeService::on_message(const std::string& message) {
       }
       if (status && pending_.verify && status_counter_ > pending_.after &&
           received > pending_.after_time) {
+        ++pending_.fresh_statuses;
         if (const auto* slot = target_slot(print, pending_.ams, pending_.tray)) {
+          pending_.target_seen = true;
           const auto& tray = *slot;
           const auto& f = pending_.expected;
           // Stock telemetry does not reliably echo setting_id. Preserve the
           // prototype's physical-slot comparison; compare it when supplied.
-          bool matches = text(tray, "tray_info_idx") == f.profile &&
-                         text(tray, "tray_type") == f.type && text(tray, "tray_color") == f.color &&
-                         text(tray, "nozzle_temp_min") == std::to_string(f.temp_min) &&
-                         text(tray, "nozzle_temp_max") == std::to_string(f.temp_max) &&
-                         (!tray.contains("setting_id") || text(tray, "setting_id") == f.setting);
-          pending_.matches = pending_.matches || matches;
+          std::string mismatches;
+          auto compare = [&](const char* field, const std::string& expected) {
+            if (text(tray, field) == expected) return;
+            if (!mismatches.empty()) mismatches += ",";
+            mismatches += field;
+          };
+          compare("tray_info_idx", f.profile);
+          compare("tray_type", f.type);
+          compare("tray_color", f.color);
+          compare("nozzle_temp_min", std::to_string(f.temp_min));
+          compare("nozzle_temp_max", std::to_string(f.temp_max));
+          if (tray.contains("setting_id")) compare("setting_id", f.setting);
+          pending_.mismatched_fields = mismatches;
+          pending_.matches = pending_.matches || mismatches.empty();
         }
       }
     }
@@ -282,15 +294,32 @@ WriteResult BridgeService::set_filament(int ams, int tray, const Filament& f) {
   result.tray_id = tray;
   const auto started = Clock::now();
   auto fail = [&](const char* error) {
+    json detail{{"event", "completed"},
+                {"sequenceId", result.sequence_id},
+                {"amsId", ams},
+                {"trayId", tray},
+                {"outcome", error}};
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      const bool tracked = !result.sequence_id.empty() && pending_.sequence == result.sequence_id;
+      detail["replyReceived"] = tracked && pending_.reply;
+      detail["replyAccepted"] = tracked && pending_.accepted;
+      detail["freshStatuses"] = tracked ? pending_.fresh_statuses : 0;
+      detail["targetSeen"] = tracked && pending_.target_seen;
+      if (std::string(error) == "verification_timeout") {
+        detail["reason"] = pending_.fresh_statuses == 0 ? "no_fresh_status"
+                           : !pending_.target_seen      ? "target_slot_missing"
+                                                        : "slot_metadata_mismatch";
+        if (!pending_.mismatched_fields.empty())
+          detail["mismatchedFields"] = pending_.mismatched_fields;
+      }
       pending_.active = false;
     }
     result.error = error;
     result.elapsed_ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - started).count();
-    std::cout << "[command] sequence=" << result.sequence_id << " outcome=" << error
-              << " elapsedMs=" << result.elapsed_ms << std::endl;
+    detail["elapsedMs"] = result.elapsed_ms;
+    operational_log("command", detail);
     return result;
   };
   // Quick refusal while reconnect owns the command lock. A bounded queue also
@@ -328,7 +357,14 @@ WriteResult BridgeService::set_filament(int ams, int tray, const Filament& f) {
                  {"nozzle_temp_min", f.temp_min},
                  {"nozzle_temp_max", f.temp_max},
                  {"tray_type", f.type}}}};
-  std::cout << "[command] sequence=" << result.sequence_id << " send" << std::endl;
+  operational_log("command", {{"event", "send"},
+                              {"sequenceId", result.sequence_id},
+                              {"amsId", ams},
+                              {"trayId", tray},
+                              {"wireAmsId", ams},
+                              {"wireTrayId", is_external_slot(ams) ? external_left_id : tray},
+                              {"replyTimeoutMs", timing_.reply.count()},
+                              {"verificationTimeoutMs", timing_.verification.count()}});
   try {
     if (backend_.send(payload.dump()) != 0) {
       on_connection(false);
@@ -353,6 +389,9 @@ WriteResult BridgeService::set_filament(int ams, int tray, const Filament& f) {
       pending_.after = status_counter_;
       pending_.after_time = Clock::now();
     }
+    operational_log("command", {{"event", "reply_accepted"}, {"sequenceId", result.sequence_id}});
+    operational_log("command",
+                    {{"event", "verification_requested"}, {"sequenceId", result.sequence_id}});
     if (push_all() != 0) return fail("verification_request_failed");
     {
       std::unique_lock<std::mutex> lock(mutex_);
@@ -371,8 +410,12 @@ WriteResult BridgeService::set_filament(int ams, int tray, const Filament& f) {
     result.verified = true;
     result.elapsed_ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - started).count();
-    std::cout << "[command] sequence=" << result.sequence_id
-              << " verified elapsedMs=" << result.elapsed_ms << std::endl;
+    operational_log("command", {{"event", "completed"},
+                                {"sequenceId", result.sequence_id},
+                                {"amsId", ams},
+                                {"trayId", tray},
+                                {"outcome", "verified"},
+                                {"elapsedMs", result.elapsed_ms}});
     return result;
   } catch (const std::exception&) {
     on_connection(false);

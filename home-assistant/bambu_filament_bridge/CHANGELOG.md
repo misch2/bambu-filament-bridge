@@ -6,6 +6,7 @@
 - Preserve the prototype's external wire encoding and require a successful printer reply plus fresh matching `vir_slot` telemetry; retain legacy `vt_tray` verification for ID 255.
 - Advertise `externalFilamentWrite=true` and update API documentation and smoke checks.
 - Add regression coverage for both external holders, mismatched or stale telemetry, and serialized writes across AMS and external slots.
+- Log validated filament requests, HTTP outcomes and command phases with request/sequence IDs; explain reply and verification timeouts without exposing credentials or raw payloads.
 
 # 0.1.2
 

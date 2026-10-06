@@ -37,6 +37,8 @@ jq -e '.error == "printer_not_ready"' /tmp/write.json >/dev/null
 kill -TERM "$pid"
 wait "$pid"
 trap - EXIT
+grep -q '"event":"filament_requested"' /tmp/bfb-smoke.log
+grep -q '"error":"printer_not_ready"' /tmp/bfb-smoke.log
 if [ "${1:-standalone}" = home-assistant ]; then
     # Check the backend's effective value, after it has loaded obn.conf.
     grep -qx 'OBN_SKIP_TLS_VERIFY=1' /data/obn.env

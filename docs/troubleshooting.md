@@ -32,3 +32,41 @@ Default mode only reads health and capabilities. `--write-json path --ams N --tr
 **changes printer state** using the exact file payload. This test must never be
 added to ordinary CI; it checks `status=synced` and `verified=true` after a write.
 No credentials or printer identifiers should be placed in committed test files.
+
+## Request and command logs
+
+`[http]` and `[command]` lines contain one JSON object with a UTC `time`.
+`request_received` identifies the request by `requestId`, method and recognized
+route. `filament_requested` records the validated `amsId`, `trayId`, profile,
+setting, type, color and temperatures. `request_completed` records HTTP status,
+elapsed time, error identifier, and the command `sequenceId` when one was allocated.
+Use that sequence to follow `send`, `reply_accepted`, `verification_requested`
+and `completed` command events. The send event includes both API slot IDs and
+wire IDs, plus the reply and verification deadlines.
+
+Rejected requests record their error without printing the raw body or headers.
+`validation_failed.field` identifies the invalid field, such as `amsId`,
+`missing_profile` or `tempMin`. Unknown routes and methods are logged as `unknown`
+and `other`; arbitrary paths and query strings are never rendered. Metadata is
+limited to validated fields, JSON escaped, and configured access codes/tokens
+are redacted. Unknown JSON fields and printer payloads are never logged.
+
+For `printer_reply_timeout`, no reply with the command's sequence arrived before
+the deadline. For `verification_timeout`, the command was accepted but the log's
+`reason` distinguishes:
+
+- `no_fresh_status`: no valid push status arrived after the verification boundary.
+- `target_slot_missing`: fresh status arrived but did not contain the target holder/tray.
+- `slot_metadata_mismatch`: the target was observed, but `mismatchedFields` lists
+  the telemetry fields that did not match the requested metadata.
+
+Command completion also records `replyReceived`, `replyAccepted`, `freshStatuses`
+and `targetSeen` on failures. Observed printer values are not dumped.
+
+The bridge's error responses are JSON. An HTML `504 Gateway Time-out` page does
+not identify a bridge error: check the HA UI, proxy and client logs alongside
+the bridge's request events. If there is no request event, the request may not
+have reached the bridge. If `request_completed` records a result, compare its
+timestamp and status with the caller's timeout. Allow for the one-second queue
+wait, four-second reply deadline, four-second verification deadline and any
+synchronous backend call latency.

@@ -342,6 +342,10 @@ Make sure the token configured in SpoolmanSync is exactly the same as
 
 Check the bridge log. A synchronization is only reported as successful after
 the printer confirms the command and the resulting slot metadata is verified.
+Request logs show the validated target and filament metadata, HTTP result and
+elapsed time. Command logs distinguish reply timeouts from verification failures,
+including missing telemetry, missing slots and mismatched fields. Headers and
+credentials are never logged; see [log details](docs/troubleshooting.md#request-and-command-logs).
 
 ### Bambu Studio does not update immediately
 

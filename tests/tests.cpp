@@ -3,6 +3,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -342,6 +343,132 @@ void external() {
   Fixture legacy(timing(), true, true, external_right_id, 1);
   CHECK(legacy.service.set_filament(external_right_id, 0, legacy.fake.loaded).verified);
 }
+class LogCapture {
+ public:
+  LogCapture() {
+    std::cout.flush();
+    file_ = std::tmpfile();
+    CHECK(file_ != nullptr);
+    original_ = dup(STDOUT_FILENO);
+    CHECK(original_ >= 0);
+    CHECK(dup2(fileno(file_), STDOUT_FILENO) >= 0);
+  }
+  ~LogCapture() {
+    std::cout.flush();
+    dup2(original_, STDOUT_FILENO);
+    close(original_);
+    std::fclose(file_);
+  }
+  std::string contents() {
+    std::cout.flush();
+    std::rewind(file_);
+    std::string result;
+    char buffer[4096];
+    while (auto count = std::fread(buffer, 1, sizeof(buffer), file_)) result.append(buffer, count);
+    return result;
+  }
+
+ private:
+  FILE* file_ = nullptr;
+  int original_ = -1;
+};
+void logging() {
+  Fixture f;
+  LogCapture capture;
+  auto r = request(f.cfg);
+  auto payload = body();
+  payload["profile"] = "prefix:" + f.cfg.access_code;
+  payload["setting"] = f.cfg.http_token;
+  payload["private_extra"] = "UNLOGGED_PRIVATE_EXTRA";
+  r.body = payload.dump();
+  CHECK(handle_request(r, f.service, f.cfg).status == 200);
+  r.headers["authorization"] = "Bearer UNLOGGED_WRONG_TOKEN";
+  CHECK(handle_request(r, f.service, f.cfg).status == 401);
+  r = request(f.cfg);
+  r.path = "/api/v1/ams/" + f.cfg.access_code + "/trays/0/filament";
+  CHECK(handle_request(r, f.service, f.cfg).status == 400);
+  r.path = "/unknown?token=" + f.cfg.http_token;
+  CHECK(handle_request(r, f.service, f.cfg).status == 404);
+  r = request(f.cfg);
+  payload = body();
+  payload.erase("profile");
+  r.body = payload.dump();
+  CHECK(handle_request(r, f.service, f.cfg).status == 400);
+  payload = body();
+  payload["tempMin"] = 401;
+  r.body = payload.dump();
+  CHECK(handle_request(r, f.service, f.cfg).status == 400);
+  r = request(f.cfg);
+  r.path = "/api/v1/ams/254/trays/0/filament";
+  f.fake.no_reply = true;
+  CHECK(handle_request(r, f.service, f.cfg).status == 504);
+  f.fake.no_reply = false;
+  f.fake.telemetry = false;
+  CHECK(handle_request(r, f.service, f.cfg).status == 504);
+  f.fake.telemetry = true;
+  f.fake.status_layout = 2;
+  CHECK(handle_request(r, f.service, f.cfg).status == 504);
+  f.fake.status_layout = 0;
+  f.fake.wrong_tray = true;
+  CHECK(handle_request(r, f.service, f.cfg).status == 504);
+  auto output = capture.contents();
+  for (const auto& secret :
+       {f.cfg.http_token, f.cfg.access_code, std::string("UNLOGGED_PRIVATE_EXTRA"),
+        std::string("UNLOGGED_WRONG_TOKEN")})
+    CHECK(output.find(secret) == std::string::npos);
+  std::map<unsigned long long, json> received;
+  std::set<std::string> sent_sequences, timeout_reasons;
+  bool saw_filament = false, saw_missing_profile = false, saw_temp = false;
+  bool saw_reply_timeout = false, saw_correlated_success = false;
+  std::istringstream lines(output);
+  std::string line;
+  while (std::getline(lines, line)) {
+    if (line.rfind("[http] ", 0) != 0 && line.rfind("[command] ", 0) != 0) continue;
+    auto event = json::parse(line.substr(line.find(' ') + 1));
+    CHECK(event["time"].is_string());
+    if (event["event"] == "request_received") {
+      auto id = event["requestId"].get<unsigned long long>();
+      CHECK(received.emplace(id, event).second);
+    }
+    if (event["event"] == "filament_requested") {
+      CHECK(event["amsId"].is_number_integer());
+      CHECK(event["trayId"].is_number_integer());
+      CHECK(event["filament"]["color"] == "808080FF");
+      CHECK(event["filament"]["tempMin"] == 220);
+      saw_filament = true;
+    }
+    if (event["event"] == "validation_failed") {
+      saw_missing_profile |= event["field"] == "missing_profile";
+      saw_temp |= event["field"] == "tempMin";
+    }
+    if (event["event"] == "send") {
+      sent_sequences.insert(event["sequenceId"].get<std::string>());
+      if (event["amsId"] == 254) CHECK(event["wireTrayId"] == 254);
+    }
+    if (event["event"] == "request_completed") {
+      CHECK(received.count(event["requestId"].get<unsigned long long>()) == 1);
+      CHECK(event["elapsedMs"].is_number_integer());
+      if (event["status"] == 200 && event.contains("sequenceId")) {
+        CHECK(sent_sequences.count(event["sequenceId"].get<std::string>()) == 1);
+        saw_correlated_success = true;
+      }
+    }
+    if (event.value("outcome", "") == "printer_reply_timeout") {
+      CHECK(event["replyReceived"] == false);
+      saw_reply_timeout = true;
+    }
+    if (event.value("outcome", "") == "verification_timeout") {
+      CHECK(event["replyAccepted"] == true);
+      timeout_reasons.insert(event["reason"].get<std::string>());
+      if (event["reason"] == "slot_metadata_mismatch")
+        CHECK(event["mismatchedFields"] == "tray_info_idx");
+    }
+  }
+  CHECK(saw_filament && saw_missing_profile && saw_temp && saw_reply_timeout &&
+        saw_correlated_success);
+  CHECK(timeout_reasons == std::set<std::string>({"no_fresh_status", "target_slot_missing",
+                                                  "slot_metadata_mismatch"}));
+}
 void concurrency() {
   auto t = timing();
   t.reply = 1s;
@@ -476,6 +603,8 @@ int main(int argc, char** argv) try {
     verification();
   else if (suite == "external")
     external();
+  else if (suite == "logging")
+    logging();
   else if (suite == "concurrency")
     concurrency();
   else if (suite == "http")

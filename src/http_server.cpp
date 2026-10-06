@@ -12,9 +12,64 @@
 #include <regex>
 #include <sstream>
 #include <stdexcept>
+
+#include "bfb/log.hpp"
 namespace bfb {
 using json = nlohmann::json;
 namespace {
+std::atomic<unsigned long long> request_sequence{0};
+const std::regex filament_route("^/api/v1/ams/([^/]+)/trays/([^/]+)/filament$");
+json request_fields(const HttpRequest& r) {
+  // Never render arbitrary paths, query strings, methods or headers.
+  std::string route = "unknown";
+  if (r.path == "/health" || r.path == "/api/v1/capabilities")
+    route = r.path;
+  else if (std::regex_match(r.path, filament_route))
+    route = "/api/v1/ams/{amsId}/trays/{trayId}/filament";
+  return {{"method", r.method == "GET" || r.method == "POST" ? r.method : "other"},
+          {"route", route}};
+}
+class RequestLog {
+ public:
+  explicit RequestLog(const HttpRequest& r) : fields_(request_fields(r)), started_(Clock::now()) {
+    fields_["requestId"] = ++request_sequence;
+    event("request_received");
+  }
+  void event(const char* event_name, const json& detail = json::object()) {
+    auto fields = fields_;
+    fields.update(detail);
+    fields["event"] = event_name;
+    operational_log("http", fields);
+  }
+  void sequence(const std::string& id) {
+    if (!id.empty()) fields_["sequenceId"] = id;
+  }
+  HttpResponse finish(const HttpResponse& response) {
+    auto body = json::parse(response.body, nullptr, false);
+    json detail{
+        {"status", response.status},
+        {"elapsedMs",
+         std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - started_).count()}};
+    if (body.is_object() && body.contains("error")) detail["error"] = body["error"];
+    event("request_completed", detail);
+    return response;
+  }
+
+ private:
+  json fields_;
+  Clock::time_point started_;
+};
+std::string redact(std::string value, const Config& c) {
+  for (const auto& secret : {c.http_token, c.access_code}) {
+    if (secret.empty()) continue;
+    std::size_t pos = 0;
+    while ((pos = value.find(secret, pos)) != std::string::npos) {
+      value.replace(pos, secret.size(), "[redacted]");
+      pos += std::string("[redacted]").size();
+    }
+  }
+  return value;
+}
 std::string lower(std::string value) {
   for (char& c : value) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
   return value;
@@ -38,23 +93,25 @@ bool authorized(const HttpRequest& request, const std::string& expected) {
     diff |= static_cast<unsigned char>(token[i]) ^ static_cast<unsigned char>(expected[i]);
   return diff == 0;
 }
-int index(const std::string& value, int max) {
+int index(const std::string& value, int max, const char* field) {
   if (value.empty() || value.size() > 3 ||
       value.find_first_not_of("0123456789") != std::string::npos)
-    throw std::invalid_argument("index");
+    throw std::invalid_argument(field);
   int result = std::stoi(value);
-  if (result > max) throw std::invalid_argument("index");
+  if (result > max) throw std::invalid_argument(field);
   return result;
 }
 Filament validate(const json& input) {
   Filament f;
   auto string = [&](const char* key) {
-    const auto& value = input.at(key);
-    if (!value.is_string()) throw std::invalid_argument("string");
+    auto it = input.find(key);
+    if (it == input.end()) throw std::invalid_argument(std::string("missing_") + key);
+    const auto& value = *it;
+    if (!value.is_string()) throw std::invalid_argument(key);
     auto s = value.get<std::string>();
     if (trim(s).empty() || s.size() > 256 ||
         std::any_of(s.begin(), s.end(), [](unsigned char c) { return c < 32 || c == 127; }))
-      throw std::invalid_argument("string");
+      throw std::invalid_argument(key);
     return s;
   };
   f.profile = string("profile");
@@ -66,16 +123,17 @@ Filament validate(const json& input) {
     throw std::invalid_argument("color");
   for (char& c : f.color) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
   auto temperature = [&](const char* key) {
-    const auto& value = input.at(key);
-    if (!value.is_number()) throw std::invalid_argument("temperature");
+    auto it = input.find(key);
+    if (it == input.end()) throw std::invalid_argument(std::string("missing_") + key);
+    const auto& value = *it;
+    if (!value.is_number()) throw std::invalid_argument(key);
     double n = value.get<double>();
-    if (!(n >= 0 && n <= 400) || n != static_cast<int>(n))
-      throw std::invalid_argument("temperature");
+    if (!(n >= 0 && n <= 400) || n != static_cast<int>(n)) throw std::invalid_argument(key);
     return static_cast<int>(n);
   };
   f.temp_min = temperature("tempMin");
   f.temp_max = temperature("tempMax");
-  if (f.temp_min > f.temp_max) throw std::invalid_argument("temperature range");
+  if (f.temp_min > f.temp_max) throw std::invalid_argument("temperature_range");
   return f;
 }
 HttpResponse read_request(int fd, HttpRequest& request) {
@@ -179,7 +237,9 @@ HttpResponse error_response(int status, const std::string& error) {
                                                                 : "Request could not be completed"}}
                       .dump()};
 }
-HttpResponse handle_request(const HttpRequest& r, BridgeService& service, const Config& c) {
+namespace {
+HttpResponse handle_request_impl(const HttpRequest& r, BridgeService& service, const Config& c,
+                                 RequestLog& log) {
   if (r.method == "GET" && r.path == "/health") {
     auto h = service.health();
     return {h.ready ? 200 : 503, json{{"status", h.ready ? "ready" : "not_ready"},
@@ -203,8 +263,7 @@ HttpResponse handle_request(const HttpRequest& r, BridgeService& service, const 
                       {"features", {{"amsFilamentWrite", true}, {"externalFilamentWrite", true}}}}
                      .dump()};
   std::smatch match;
-  static const std::regex route("^/api/v1/ams/([^/]+)/trays/([^/]+)/filament$");
-  if (r.method != "POST" || !std::regex_match(r.path, match, route))
+  if (r.method != "POST" || !std::regex_match(r.path, match, filament_route))
     return error_response(404, "not_found");
   if (r.body.size() > max_body_size) return error_response(413, "request_too_large");
   int ams, tray;
@@ -212,17 +271,31 @@ HttpResponse handle_request(const HttpRequest& r, BridgeService& service, const 
   auto input = json::parse(r.body, nullptr, false);
   if (!input.is_object()) return error_response(400, "invalid_json");
   try {
-    ams = index(match[1], external_right_id);
-    tray = index(match[2], 3);
+    ams = index(match[1], external_right_id, "amsId");
+    tray = index(match[2], 3, "trayId");
     auto content = r.headers.find("content-type");
     if (content == r.headers.end() ||
         lower(trim(content->second.substr(0, content->second.find(';')))) != "application/json")
       return error_response(400, "invalid_content_type");
     f = validate(input);
-  } catch (const std::exception&) {
+  } catch (const std::invalid_argument& e) {
+    log.event("validation_failed", {{"field", e.what()}});
+    return error_response(400, "invalid_request");
+  } catch (const json::exception&) {
+    log.event("validation_failed", {{"field", "filament"}});
     return error_response(400, "invalid_request");
   }
+  log.event("filament_requested", {{"amsId", ams},
+                                   {"trayId", tray},
+                                   {"filament",
+                                    {{"profile", redact(f.profile, c)},
+                                     {"setting", redact(f.setting, c)},
+                                     {"type", redact(f.type, c)},
+                                     {"color", redact(f.color, c)},
+                                     {"tempMin", f.temp_min},
+                                     {"tempMax", f.temp_max}}}});
   auto result = service.set_filament(ams, tray, f);
+  log.sequence(result.sequence_id);
   if (!result.verified) {
     int status = 502;
     if (result.error == "printer_not_ready" || result.error == "printer_busy")
@@ -238,6 +311,16 @@ HttpResponse handle_request(const HttpRequest& r, BridgeService& service, const 
                     {"amsId", result.ams_id},
                     {"trayId", result.tray_id}}
                    .dump()};
+}
+}  // namespace
+HttpResponse handle_request(const HttpRequest& r, BridgeService& service, const Config& c) {
+  RequestLog log(r);
+  try {
+    return log.finish(handle_request_impl(r, service, c, log));
+  } catch (const std::exception&) {
+    log.finish(error_response(500, "internal_error"));
+    throw;
+  }
 }
 HttpServer::HttpServer(BridgeService& service, const Config& config)
     : service_(service), config_(config) {}
@@ -318,6 +401,11 @@ void HttpServer::worker() {
     try {
       HttpRequest request;
       auto error = read_request(fd, request);
+      if (error.status) {
+        RequestLog log(request);
+        log.event("request_read_failed");
+        log.finish(error);
+      }
       respond(fd, error.status ? error : handle_request(request, service_, config_));
     } catch (const std::exception&) {
       respond(fd, error_response(500, "internal_error"));
