@@ -28,6 +28,7 @@ class FakeBackend : public Backend {
   std::condition_variable cv;
   std::vector<std::string> sequences;
   json last_command;
+  json last_write;
   Filament loaded{"GFG99", "GFSG99_15", "PETG", "808080FF", 220, 260};
   std::atomic<int> ams{0}, tray{3};
   void start(BackendCallbacks c) override { callbacks = std::move(c); }
@@ -159,6 +160,7 @@ class FakeBackend : public Backend {
       {
         std::lock_guard<std::mutex> lock(mutex);
         last_command = data;
+        last_write = root;
         loaded = {data.at("tray_info_idx"), data.at("setting_id"),      data.at("tray_type"),
                   data.at("tray_color"),    data.at("nozzle_temp_min"), data.at("nozzle_temp_max")};
       }

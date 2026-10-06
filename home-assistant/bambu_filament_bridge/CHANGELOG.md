@@ -1,5 +1,11 @@
 # Unreleased
 
+# 0.1.6
+
+- Promote the filament protocol fix after the owner reported 0.1.5-experimental working on the live X2D.
+- Lock complete AMS, deputy/left and main/right wire commands in checked-in golden JSON fixtures, including scalar types and absence of extra fields.
+- Retain matching-ACK plus fresh-telemetry verification and the existing SpoolmanSync API.
+
 # 0.1.5-experimental
 
 - Audit filament-setting commands and replies against current Bambu Studio; add complete golden wire commands.

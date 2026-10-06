@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
-project(bambu_filament_bridge VERSION 0.1.5 LANGUAGES CXX)
+project(bambu_filament_bridge VERSION 0.1.6 LANGUAGES CXX)
 # CMake project versions are numeric; preserve the full prerelease identity separately.
-set(BFB_VERSION "0.1.5-experimental")
+set(BFB_VERSION "0.1.6")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -30,6 +30,8 @@ if(BUILD_TESTING)
   add_executable(bfb_tests tests/tests.cpp)
   target_link_libraries(bfb_tests PRIVATE bfb_core)
   target_compile_options(bfb_tests PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_definitions(bfb_tests PRIVATE
+    BFB_PROTOCOL_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/golden")
   foreach(suite config validation service verification external protocol logging concurrency http)
     add_test(NAME ${suite} COMMAND bfb_tests ${suite})
     set_tests_properties(${suite} PROPERTIES TIMEOUT 20)

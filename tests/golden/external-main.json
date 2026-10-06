@@ -1,0 +1,15 @@
+{
+  "print": {
+    "command": "ams_filament_setting",
+    "sequence_id": "<sequence_id>",
+    "ams_id": 255,
+    "slot_id": 0,
+    "tray_id": 254,
+    "tray_info_idx": "GFL99",
+    "setting_id": "GFSL99_17",
+    "tray_color": "FFCF98FF",
+    "nozzle_temp_min": 190,
+    "nozzle_temp_max": 240,
+    "tray_type": "PLA"
+  }
+}

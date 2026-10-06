@@ -385,30 +385,35 @@ void protocol() {
   // Golden single-color commands: Bambu Studio command_ams_filament_settings,
   // da8b44ee34dd349f2ae0df3f1cbae366df482354, DeviceManager.cpp:1691-1722.
   struct Address {
-    int ams, tray, slot, wire_tray;
+    int ams, tray;
+    const char* fixture;
   };
   for (const auto address :
-       {Address{0, 2, 2, 2}, Address{254, 0, 0, 254}, Address{255, 0, 0, 254}}) {
+       {Address{0, 2, "ams-0-tray-2.json"}, Address{254, 0, "external-deputy.json"},
+        Address{255, 0, "external-main.json"}}) {
+    std::ifstream file(std::filesystem::path(BFB_PROTOCOL_GOLDEN_DIR) / address.fixture);
+    CHECK(file.good());
+    const auto golden = json::parse(file);
+    CHECK(golden.at("print").at("sequence_id") == "<sequence_id>");
     for (bool omit_result : {false, true}) {
       Fixture f;
       f.fake.omit_result = omit_result;
       const Filament filament{"GFL99", "GFSL99_17", "PLA", "FFCF98FF", 190, 240};
-      const auto result = f.service.set_filament(address.ams, address.tray, filament);
-      CHECK(result.verified);
-      const json expected{{"command", "ams_filament_setting"},
-                          {"sequence_id", result.sequence_id},
-                          {"ams_id", address.ams},
-                          {"slot_id", address.slot},
-                          {"tray_id", address.wire_tray},
-                          {"tray_info_idx", "GFL99"},
-                          {"setting_id", "GFSL99_17"},
-                          {"tray_color", "FFCF98FF"},
-                          {"nozzle_temp_min", 190},
-                          {"nozzle_temp_max", 240},
-                          {"tray_type", "PLA"}};
-      std::lock_guard<std::mutex> lock(f.fake.mutex);
-      CHECK(f.fake.last_command == expected);
-      CHECK(!result.sequence_id.empty());
+      std::string previous_sequence;
+      for (int write = 0; write < 2; ++write) {
+        const auto result = f.service.set_filament(address.ams, address.tray, filament);
+        CHECK(result.verified);
+        CHECK(!result.sequence_id.empty());
+        CHECK(result.sequence_id.find_first_not_of("0123456789") == std::string::npos);
+        CHECK(result.sequence_id != previous_sequence);
+        previous_sequence = result.sequence_id;
+        auto expected = golden;
+        // Only the runtime sequence varies. Never derive fixture addresses or metadata from send.
+        expected["print"]["sequence_id"] = result.sequence_id;
+        std::lock_guard<std::mutex> lock(f.fake.mutex);
+        // Canonical JSON comparison also preserves scalar types (190 differs from 190.0).
+        CHECK(f.fake.last_write.dump() == expected.dump());
+      }
     }
   }
 }

@@ -44,7 +44,7 @@ RUN chmod 755 /usr/local/bin/bfb-entrypoint
 LABEL org.opencontainers.image.title="bambu-filament-bridge" \
       org.opencontainers.image.source="https://github.com/misch2/bambu-filament-bridge" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later" \
-      io.hass.type="app" io.hass.version="0.1.5-experimental" io.hass.arch="amd64|aarch64"
+      io.hass.type="app" io.hass.version="0.1.6" io.hass.arch="amd64|aarch64"
 ENV BAMBU_DATA_DIR=/data BAMBU_HTTP_BIND=0.0.0.0 BAMBU_HTTP_PORT=8080 \
     OBN_BLOCK_CLOUD=1 OBN_LOG_LEVEL=info OBN_LOG_TO_FILE=0
 # Initialize Supervisor's root-owned mount, then permanently drop privileges.

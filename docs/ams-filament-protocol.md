@@ -107,11 +107,17 @@ packed-ID coverage, authoritative `vir_slot` absence coverage, and `errno`
 diagnostics. Existing suites cover rejected/missing/wrong-sequence ACKs,
 freshness, all metadata mismatches, both holders, serialization and reconnect.
 
-`externalFilamentWrite=true` retains the existing documented meaning of an
-implemented and fake-backend-tested protocol path. It does **not** assert that
-the corrected command has passed live validation. The v0.1.3 X2D report showed
-unchanged physical metadata and a timeout. A live X2D test must confirm changes
-on both holders, ACK shape, fresh `vir_slot` values, and Studio's displayed
-metadata before real-hardware success can be claimed. No live tests ran in
-this audit. No plugin pin, HA packaging, environment variables, or HTTP request/
-success response fields were changed.
+The v0.1.3 X2D report showed unchanged physical metadata and a timeout.
+On 2026-10-06 the owner reported `0.1.5-experimental` working on the live X2D
+and requested stable `0.1.6`. This report supplies the hardware validation;
+the agent did not run a live test or collect raw ACK/status captures.
+`externalFilamentWrite=true` remains advertised, backed by protocol regression
+coverage and that owner report. Other printer/firmware combinations are untested.
+
+For `0.1.6`, [checked-in golden fixtures](../tests/golden/README.md) lock the complete
+AMS, deputy and main wire envelopes. Only the dynamic sequence is substituted;
+field values, types, missing fields, additional fields and addressing are compared
+against independent JSON documents for success and result-less ACKs. Successive
+writes also check sequence uniqueness. Fixtures must not be regenerated from
+encoder output to resolve a regression. No printer runtime behavior, plugin pin,
+HA packaging, environment variables, or HTTP request/success fields changed.

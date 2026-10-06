@@ -95,8 +95,9 @@ paths:
         wire tray_id 254 with slot_id 0 and verifies vir_slot by virtual ID.
         Normal AMS commands use slot_id equal to tray_id. Legacy vt_tray
         telemetry can verify only ID 255 when vir_slot is absent. Capabilities
-        advertises the implemented, regression-tested external path; live X2D
-        validation of the corrected command is still pending.
+        advertises the implemented, regression-tested external path. The owner
+        reported the corrected command working on the live X2D with
+        0.1.5-experimental; other printer/firmware combinations remain untested.
         No separate external endpoint exists.
       parameters:
         - name: amsId

@@ -164,8 +164,8 @@ ghcr.io/misch2/bambu-filament-bridge
 ```
 
 For production installations, prefer a versioned tag instead of `latest`.
-The current experimental build is `0.1.5-experimental`; its external-holder
-protocol fixes still require live X2D validation.
+The current stable release is `0.1.6`. The owner reported the preceding
+`0.1.5-experimental` protocol fix working on the live X2D.
 
 ---
 
@@ -389,8 +389,8 @@ curl --fail-with-body -X POST "$BAMBU_BRIDGE_URL/api/v1/ams/254/trays/0/filament
 ```
 
 Use ID 255 for the right holder. Capabilities reports `externalFilamentWrite=true`.
-This denotes the implemented, fake-backend-tested path; the corrected command still
-requires live X2D validation of physical metadata changes on both holders.
+The path has fake-backend regression coverage and owner-reported live X2D
+validation of `0.1.5-experimental`. Other printer/firmware combinations remain untested.
 Success requires a matching command/sequence ACK without explicit `result=fail`
 (the printer may omit `result`) and fresh matching holder telemetry after a new
 post-ACK pushall. The ACK alone never produces `verified=true`.

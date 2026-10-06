@@ -32,6 +32,9 @@ The original prototype at `129e4d2` also omitted `slot_id`; historical reports
 of working writes do not validate the corrected protocol on current X2D firmware.
 The v0.1.3 hardware report showed a reply timeout and unchanged external metadata.
 The corrected path follows [the Bambu Studio protocol audit](ams-filament-protocol.md)
-and has fake-backend regression coverage, but still requires live X2D validation
-of physical metadata changes on both holders. Other printer/firmware combinations
+and has fake-backend regression coverage. On 2026-10-06 the owner reported
+`0.1.5-experimental` working on the live X2D and requested promotion to `0.1.6`.
+This is owner-reported hardware validation, separate from the automated tests;
+no new agent-operated live test was performed. Complete wire commands are locked
+in [golden fixtures](../tests/golden/README.md). Other printer/firmware combinations
 remain untested.
