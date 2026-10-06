@@ -121,3 +121,28 @@ against independent JSON documents for success and result-less ACKs. Successive
 writes also check sequence uniqueness. Fixtures must not be regenerated from
 encoder output to resolve a regression. No printer runtime behavior, plugin pin,
 HA packaging, environment variables, or HTTP request/success fields changed.
+
+## Reset / clear operation
+
+DELETE shares SET's command lifecycle and physical target lookup. The pending
+operation explicitly records CLEAR, rather than inferring it from empty strings.
+Reset uses the existing `ams_filament_setting` command, with:
+
+```json
+{"tray_info_idx":"","setting_id":"","tray_color":"FFFFFF00","nozzle_temp_min":0,"nozzle_temp_max":0,"tray_type":""}
+```
+
+| Target | wire ams_id | wire slot_id | wire tray_id |
+| --- | --- | --- | --- |
+| AMS 0 / tray 2 (golden example) | 0 | 2 | 2 |
+| External left/deputy | 254 | 0 | 254 |
+| External right/main | 255 | 0 | 254 |
+
+All three complete payloads are covered by `tests/golden/reset-*.json`.
+A matching command and sequence ACK without explicit `result=fail` is required.
+Only fresh target telemetry after the reply and verification request can verify
+CLEAR. Profile, type and setting must be absent or empty strings; temperatures
+must be absent, empty strings, numeric zero or string "0". Malformed values fail
+verification. Color is ignored because firmware can normalize it. Existing SET
+comparison and external telemetry mapping are preserved. No calibration commands
+are added. Real X2D LCD behavior remains untested for CLEAR.

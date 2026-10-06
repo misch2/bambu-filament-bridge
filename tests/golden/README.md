@@ -18,3 +18,5 @@ Do not change fixtures to make a failing encoder test pass. A fixture change
 requires an intentional protocol change backed by primary upstream evidence
 and relevant real-printer validation, recorded in the protocol audit.
 Run `ctest --test-dir build -R protocol --output-on-failure` to check them.
+
+`reset-*.json` cover verified metadata CLEAR for normal AMS and both X2D external holders, using the existing ams_filament_setting command.

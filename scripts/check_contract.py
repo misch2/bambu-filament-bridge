@@ -22,6 +22,12 @@ def main():
     require(spec["paths"]["/health"]["get"]["security"] == [], "Health must be public")
     require("503" in spec["paths"]["/health"]["get"]["responses"], "Health 503 missing")
 
+    filament = spec["paths"]["/api/v1/ams/{amsId}/trays/{trayId}/filament"]
+    require(set(filament) == {"post", "delete"}, "Filament methods mismatch")
+    require("requestBody" not in filament["delete"], "DELETE must not require JSON")
+    require(spec["components"]["schemas"]["Cleared"]["properties"]["status"]["enum"] == ["cleared"],
+            "Clear success contract mismatch")
+
     def references(node):
         if isinstance(node, dict):
             if "$ref" in node:

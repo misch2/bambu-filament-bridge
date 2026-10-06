@@ -38,3 +38,5 @@ This is owner-reported hardware validation, separate from the automated tests;
 no new agent-operated live test was performed. Complete wire commands are locked
 in [golden fixtures](../tests/golden/README.md). Other printer/firmware combinations
 remain untested.
+
+Metadata CLEAR (DELETE), including external IDs 254/255, is implemented and fake-backend tested. Live X2D LCD reset behavior remains untested; existing SET hardware results do not establish CLEAR compatibility.

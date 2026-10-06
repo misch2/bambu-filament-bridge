@@ -422,3 +422,27 @@ See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for details.
 
 Bambu Filament Bridge is an independent community project and is not affiliated
 with or endorsed by Bambu Lab.
+
+## Verified metadata clear
+
+`DELETE /api/v1/ams/{amsId}/trays/{trayId}/filament` clears the selected slot's
+filament metadata. Use the same Bearer token as POST; no body or Content-Type is required.
+Regular AMS targets use their AMS ID and tray 0..3. X2D external holders use
+AMS ID 254 (left/deputy) or 255 (right/main), with tray 0.
+
+```sh
+curl -X DELETE "$BAMBU_BRIDGE_URL/api/v1/ams/0/trays/3/filament" \
+  -H "Authorization: Bearer $BAMBU_BRIDGE_TOKEN"
+```
+
+HTTP 200 returns `status: "cleared"`, `verified: true`, `elapsedMs`, `sequenceId`,
+`amsId` and `trayId`. Success requires a matching accepted command ACK and fresh
+post-reply target telemetry confirming cleared metadata. Existing POST behavior is unchanged.
+Errors use the existing 400/401/502/503/504 model; oversized requests remain 413.
+A timeout can occur after the printer has changed the slot.
+No PA/flow calibration selection cleanup is performed. Fake-backend coverage is
+complete; removal of stale metadata on the real X2D LCD remains to be validated.
+
+Optional live check: set `BFB_LIVE_TEST=1` and run `scripts/live_smoke.py --clear
+--ams 254 --tray 0` with your bridge URL/token environment. This changes the selected
+holder only; without `--clear` or `--write-json`, smoke checks are read-only.

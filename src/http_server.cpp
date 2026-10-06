@@ -26,7 +26,8 @@ json request_fields(const HttpRequest& r) {
     route = r.path;
   else if (std::regex_match(r.path, filament_route))
     route = "/api/v1/ams/{amsId}/trays/{trayId}/filament";
-  return {{"method", r.method == "GET" || r.method == "POST" ? r.method : "other"},
+  return {{"method",
+           r.method == "GET" || r.method == "POST" || r.method == "DELETE" ? r.method : "other"},
           {"route", route}};
 }
 class RequestLog {
@@ -263,21 +264,25 @@ HttpResponse handle_request_impl(const HttpRequest& r, BridgeService& service, c
                       {"features", {{"amsFilamentWrite", true}, {"externalFilamentWrite", true}}}}
                      .dump()};
   std::smatch match;
-  if (r.method != "POST" || !std::regex_match(r.path, match, filament_route))
+  if ((r.method != "POST" && r.method != "DELETE") ||
+      !std::regex_match(r.path, match, filament_route))
     return error_response(404, "not_found");
   if (r.body.size() > max_body_size) return error_response(413, "request_too_large");
   int ams, tray;
   Filament f;
-  auto input = json::parse(r.body, nullptr, false);
+  const bool clear = r.method == "DELETE";
+  auto input = clear ? json::object() : json::parse(r.body, nullptr, false);
   if (!input.is_object()) return error_response(400, "invalid_json");
   try {
     ams = index(match[1], external_right_id, "amsId");
     tray = index(match[2], 3, "trayId");
-    auto content = r.headers.find("content-type");
-    if (content == r.headers.end() ||
-        lower(trim(content->second.substr(0, content->second.find(';')))) != "application/json")
-      return error_response(400, "invalid_content_type");
-    f = validate(input);
+    if (!clear) {
+      auto content = r.headers.find("content-type");
+      if (content == r.headers.end() ||
+          lower(trim(content->second.substr(0, content->second.find(';')))) != "application/json")
+        return error_response(400, "invalid_content_type");
+      f = validate(input);
+    }
   } catch (const std::invalid_argument& e) {
     log.event("validation_failed", {{"field", e.what()}});
     return error_response(400, "invalid_request");
@@ -285,16 +290,19 @@ HttpResponse handle_request_impl(const HttpRequest& r, BridgeService& service, c
     log.event("validation_failed", {{"field", "filament"}});
     return error_response(400, "invalid_request");
   }
-  log.event("filament_requested", {{"amsId", ams},
-                                   {"trayId", tray},
-                                   {"filament",
-                                    {{"profile", redact(f.profile, c)},
-                                     {"setting", redact(f.setting, c)},
-                                     {"type", redact(f.type, c)},
-                                     {"color", redact(f.color, c)},
-                                     {"tempMin", f.temp_min},
-                                     {"tempMax", f.temp_max}}}});
-  auto result = service.set_filament(ams, tray, f);
+  if (clear)
+    log.event("filament_clear_requested", {{"amsId", ams}, {"trayId", tray}});
+  else
+    log.event("filament_requested", {{"amsId", ams},
+                                     {"trayId", tray},
+                                     {"filament",
+                                      {{"profile", redact(f.profile, c)},
+                                       {"setting", redact(f.setting, c)},
+                                       {"type", redact(f.type, c)},
+                                       {"color", redact(f.color, c)},
+                                       {"tempMin", f.temp_min},
+                                       {"tempMax", f.temp_max}}}});
+  auto result = clear ? service.clear_filament(ams, tray) : service.set_filament(ams, tray, f);
   log.sequence(result.sequence_id);
   if (!result.verified) {
     int status = 502;
@@ -304,7 +312,7 @@ HttpResponse handle_request_impl(const HttpRequest& r, BridgeService& service, c
       status = 504;
     return error_response(status, result.error);
   }
-  return {200, json{{"status", "synced"},
+  return {200, json{{"status", clear ? "cleared" : "synced"},
                     {"verified", true},
                     {"elapsedMs", result.elapsed_ms},
                     {"sequenceId", result.sequence_id},

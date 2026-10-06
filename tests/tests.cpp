@@ -606,6 +606,134 @@ void concurrency() {
   f.fake.hold_write = false;
   CHECK(f.service.set_filament(0, 3, f.fake.loaded).verified);
 }
+void clear_filament() {
+  auto clear_request = [](const Config& c, int ams = 0, int tray = 2) {
+    return HttpRequest{
+        "DELETE",
+        "/api/v1/ams/" + std::to_string(ams) + "/trays/" + std::to_string(tray) + "/filament",
+        {{"authorization", "Bearer " + c.http_token}},
+        ""};
+  };
+  Fixture f;
+  auto r = clear_request(f.cfg);
+  r.headers.clear();
+  CHECK(handle_request(r, f.service, f.cfg).status == 401);
+  r.headers["authorization"] = "Bearer wrong";
+  CHECK(handle_request(r, f.service, f.cfg).status == 401);
+  for (const auto* path : {"/api/v1/ams/256/trays/0/filament", "/api/v1/ams/0/trays/4/filament",
+                           "/api/v1/ams/bad/trays/0/filament"}) {
+    r = clear_request(f.cfg);
+    r.path = path;
+    CHECK(handle_request(r, f.service, f.cfg).status == 400);
+  }
+  for (int ams : {0, 254, 255}) {
+    Fixture target;
+    auto response = handle_request(clear_request(target.cfg, ams, ams == 0 ? 2 : 0), target.service,
+                                   target.cfg);
+    CHECK(response.status == 200);
+    auto result = json::parse(response.body);
+    CHECK(result["status"] == "cleared");
+    CHECK(result["verified"] == true);
+    CHECK(result["amsId"] == ams);
+    CHECK(result["trayId"] == (ams == 0 ? 2 : 0));
+    auto payload = target.fake.last_write;
+    payload["print"]["sequence_id"] = "<sequence_id>";
+    std::string name = ams == 0     ? "reset-ams-0-tray-2"
+                       : ams == 254 ? "reset-external-deputy"
+                                    : "reset-external-main";
+    std::ifstream input(std::string(BFB_PROTOCOL_GOLDEN_DIR) + "/" + name + ".json");
+    json golden;
+    input >> golden;
+    CHECK(payload == golden);
+    for (int layout : {1, 2}) {
+      target.fake.clear_layout = layout;
+      CHECK(target.service.clear_filament(ams, 0).verified);
+    }
+  }
+  for (int scenario = 0; scenario < 13; ++scenario) {
+    Fixture failure;
+    switch (scenario) {
+      case 0:
+        failure.fake.fail_send = true;
+        break;
+      case 1:
+        failure.fake.reject = true;
+        break;
+      case 2:
+        failure.fake.no_reply = true;
+        break;
+      case 3:
+        failure.fake.telemetry = false;
+        break;
+      case 4:
+        failure.fake.mismatch = 6;
+        break;
+      case 5:
+        failure.fake.wrong_tray = true;
+        break;
+      case 6:
+        failure.fake.pre_reply_only = true;
+        break;
+      case 7:
+        failure.fake.fail_verify = true;
+        break;
+      case 8:
+        failure.fake.wrong_sequence = true;
+        break;
+      case 9:
+        failure.fake.wrong_command = true;
+        break;
+      case 10:
+        failure.fake.clear_layout = 3;
+        break;
+      case 11:
+        failure.fake.clear_layout = 4;
+        break;
+      case 12:
+        failure.fake.clear_layout = 5;
+        break;
+    }
+    auto response = handle_request(clear_request(failure.cfg), failure.service, failure.cfg);
+    CHECK(response.status == (scenario == 0 || scenario == 1 || scenario == 7 ? 502 : 504));
+    CHECK(json::parse(response.body)["status"] == "error");
+  }
+  for (int mismatch : {1, 5, 7, 9}) {
+    Fixture malformed;
+    malformed.fake.mismatch = mismatch;
+    CHECK(malformed.service.clear_filament(0, 3).error == "verification_timeout");
+  }
+  {
+    Fixture disconnected(timing(), false);
+    CHECK(handle_request(clear_request(disconnected.cfg), disconnected.service, disconnected.cfg)
+              .status == 503);
+  }
+  {
+    LogCapture capture;
+    CHECK(handle_request(clear_request(f.cfg), f.service, f.cfg).status == 200);
+    CHECK(capture.contents().find("\"method\":\"DELETE\"") != std::string::npos);
+  }
+  // Matching cleared state from before the command cannot verify a new reset.
+  f.fake.loaded = {"", "", "", "FFFFFF00", 0, 0};
+  f.fake.emit_status();
+  f.fake.telemetry = false;
+  CHECK(f.service.clear_filament(0, 3).error == "verification_timeout");
+  Fixture serialized;
+  serialized.fake.hold_write = true;
+  auto first =
+      std::async(std::launch::async, [&] { return serialized.service.clear_filament(0, 3); });
+  serialized.fake.wait_write(1);
+  auto second = std::async(std::launch::async, [&] {
+    return serialized.service.set_filament(0, 3,
+                                           {"GFG99", "GFSG99_15", "PETG", "808080FF", 220, 260});
+  });
+  CHECK(second.wait_for(5ms) == std::future_status::timeout);
+  CHECK(serialized.fake.writes == 1);
+  serialized.fake.hold_write = false;
+  serialized.fake.reply();
+  CHECK(first.get().verified);
+  CHECK(second.get().verified);
+  CHECK(serialized.fake.writes == 2);
+}
 std::string wire(int port, const std::string& request) {
   int fd = socket(AF_INET, SOCK_STREAM, 0);
   CHECK(fd >= 0);
@@ -688,6 +816,11 @@ void http() {
     CHECK(result["amsId"] == ams);
     CHECK(result["trayId"] == 0);
   }
+  response = wire(server.port(),
+                  "DELETE /api/v1/ams/255/trays/0/filament HTTP/1.1\r\nAuthorization: Bearer " +
+                      c.http_token + "\r\n\r\n");
+  CHECK(response.find("HTTP/1.1 200") == 0);
+  CHECK(json::parse(response.substr(response.find("\r\n\r\n") + 4))["status"] == "cleared");
   server.stop();
 }
 int main(int argc, char** argv) try {
@@ -709,6 +842,8 @@ int main(int argc, char** argv) try {
     logging();
   else if (suite == "concurrency")
     concurrency();
+  else if (suite == "clear")
+    clear_filament();
   else if (suite == "http")
     http();
   else

@@ -172,12 +172,34 @@ void BridgeService::on_message(const std::string& message) {
             if (!mismatches.empty()) mismatches += ",";
             mismatches += field;
           };
-          compare("tray_info_idx", f.profile);
-          compare("tray_type", f.type);
-          compare("tray_color", f.color);
-          compare("nozzle_temp_min", std::to_string(f.temp_min));
-          compare("nozzle_temp_max", std::to_string(f.temp_max));
-          if (tray.contains("setting_id")) compare("setting_id", f.setting);
+          if (pending_.operation == Operation::Clear) {
+            auto cleared = [&](const char* field, bool temperature) {
+              auto value = tray.find(field);
+              bool empty = value == tray.end();
+              if (!empty) {
+                empty = value->is_string() && value->get<std::string>().empty();
+                if (temperature)
+                  empty = empty || (value->is_number() && *value == 0) ||
+                          (value->is_string() && value->get<std::string>() == "0");
+              }
+              if (!empty) {
+                if (!mismatches.empty()) mismatches += ",";
+                mismatches += field;
+              }
+            };
+            cleared("tray_info_idx", false);
+            cleared("tray_type", false);
+            cleared("setting_id", false);
+            cleared("nozzle_temp_min", true);
+            cleared("nozzle_temp_max", true);
+          } else {
+            compare("tray_info_idx", f.profile);
+            compare("tray_type", f.type);
+            compare("tray_color", f.color);
+            compare("nozzle_temp_min", std::to_string(f.temp_min));
+            compare("nozzle_temp_max", std::to_string(f.temp_max));
+            if (tray.contains("setting_id")) compare("setting_id", f.setting);
+          }
           pending_.mismatched_fields = mismatches;
           pending_.matches = pending_.matches || mismatches.empty();
         }
@@ -315,6 +337,13 @@ void BridgeService::run() {
   }
 }
 WriteResult BridgeService::set_filament(int ams, int tray, const Filament& f) {
+  return write_filament(ams, tray, f, Operation::Set);
+}
+WriteResult BridgeService::clear_filament(int ams, int tray) {
+  return write_filament(ams, tray, {"", "", "", "FFFFFF00", 0, 0}, Operation::Clear);
+}
+WriteResult BridgeService::write_filament(int ams, int tray, const Filament& f,
+                                          Operation operation) {
   WriteResult result;
   result.ams_id = ams;
   result.tray_id = tray;
@@ -322,6 +351,7 @@ WriteResult BridgeService::set_filament(int ams, int tray, const Filament& f) {
   auto fail = [&](const char* error) {
     json detail{{"event", "completed"},
                 {"sequenceId", result.sequence_id},
+                {"operation", operation == Operation::Clear ? "clear" : "set"},
                 {"amsId", ams},
                 {"trayId", tray},
                 {"outcome", error}};
@@ -368,6 +398,7 @@ WriteResult BridgeService::set_filament(int ams, int tray, const Filament& f) {
     pending_.sequence = result.sequence_id;
     pending_.ams = ams;
     pending_.tray = tray;
+    pending_.operation = operation;
     pending_.expected = f;
     pending_.epoch = epoch_;
   }
@@ -391,6 +422,7 @@ WriteResult BridgeService::set_filament(int ams, int tray, const Filament& f) {
                  {"tray_type", f.type}}}};
   operational_log("command", {{"event", "send"},
                               {"sequenceId", result.sequence_id},
+                              {"operation", operation == Operation::Clear ? "clear" : "set"},
                               {"amsId", ams},
                               {"trayId", tray},
                               {"wireAmsId", wire_ams_id},
@@ -445,6 +477,7 @@ WriteResult BridgeService::set_filament(int ams, int tray, const Filament& f) {
         std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - started).count();
     operational_log("command", {{"event", "completed"},
                                 {"sequenceId", result.sequence_id},
+                                {"operation", operation == Operation::Clear ? "clear" : "set"},
                                 {"amsId", ams},
                                 {"trayId", tray},
                                 {"outcome", "verified"},

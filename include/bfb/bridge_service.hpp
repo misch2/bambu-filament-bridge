@@ -19,7 +19,12 @@ class BridgeService {
   std::string plugin_version() const { return backend_.version(); }
   WriteResult set_filament(int ams_id, int tray_id, const Filament& filament);
 
+  WriteResult clear_filament(int ams_id, int tray_id);
+
  private:
+  enum class Operation { Set, Clear };
+  WriteResult write_filament(int ams_id, int tray_id, const Filament& filament,
+                             Operation operation);
   void on_connection(bool connected);
   void on_message(const std::string& message);
   void run();
@@ -45,6 +50,7 @@ class BridgeService {
     std::string mismatched_fields;
     std::string sequence;
     int ams = 0, tray = 0;
+    Operation operation = Operation::Set;
     Filament expected;
     unsigned long long epoch = 0, after = 0;
     Clock::time_point after_time{};

@@ -1,0 +1,15 @@
+{
+  "print": {
+    "command": "ams_filament_setting",
+    "sequence_id": "<sequence_id>",
+    "ams_id": 0,
+    "slot_id": 2,
+    "tray_id": 2,
+    "tray_info_idx": "",
+    "setting_id": "",
+    "tray_color": "FFFFFF00",
+    "nozzle_temp_min": 0,
+    "nozzle_temp_max": 0,
+    "tray_type": ""
+  }
+}

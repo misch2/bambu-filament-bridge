@@ -19,7 +19,7 @@ class FakeBackend : public Backend {
   std::atomic<bool> pre_reply_only{false}, hold_write{false}, wrong_sequence{false},
       wrong_command{false};
   std::atomic<bool> emit_certificate{true}, require_certificate{true};
-  std::atomic<int> mismatch{0};
+  std::atomic<int> mismatch{0}, clear_layout{0};
   // 0: native shape (AMS or vir_slot), 1: legacy vt_tray, 2: AMS-shaped telemetry.
   std::atomic<int> status_layout{0}, external_status_id{-1};
   std::atomic<bool> conflicting_legacy{false}, numeric_slot_id{false}, packed_slot_id{false};
@@ -102,6 +102,26 @@ class FakeBackend : public Backend {
         break;
       default:
         break;
+    }
+    if (clear_layout == 1) {
+      for (auto field :
+           {"tray_info_idx", "tray_type", "setting_id", "nozzle_temp_min", "nozzle_temp_max"})
+        slot.erase(field);
+      slot["tray_color"] = "normalized";
+    } else if (clear_layout == 2) {
+      slot["nozzle_temp_min"] = 0;
+      slot["nozzle_temp_max"] = "";
+    } else if (clear_layout == 3) {
+      slot["tray_type"] = json::object();
+    } else if (clear_layout == 4) {
+      slot["nozzle_temp_max"] = 200;
+    }
+    if (clear_layout == 5) {
+      slot["tray_info_idx"] = "GFG99";
+      slot["tray_type"] = "PETG";
+      slot["setting_id"] = "GFSG99_15";
+      slot["nozzle_temp_min"] = 220;
+      slot["nozzle_temp_max"] = 260;
     }
     json print{{"command", "push_status"}};
     if (status_layout == 1) {

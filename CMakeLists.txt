@@ -32,7 +32,7 @@ if(BUILD_TESTING)
   target_compile_options(bfb_tests PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_definitions(bfb_tests PRIVATE
     BFB_PROTOCOL_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/golden")
-  foreach(suite config validation service verification external protocol logging concurrency http)
+  foreach(suite config validation service verification external protocol logging concurrency http clear)
     add_test(NAME ${suite} COMMAND bfb_tests ${suite})
     set_tests_properties(${suite} PROPERTIES TIMEOUT 20)
   endforeach()

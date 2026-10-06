@@ -185,6 +185,90 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+    delete:
+      operationId: clearAmsFilament
+      summary: Clear and verify AMS or external holder filament metadata
+      description: >-
+        No request body or Content-Type is required. Uses the same target addressing,
+        serialization and matching ACK plus fresh post-reply telemetry guarantees as POST.
+        Sends ams_filament_setting with empty profile, setting and type, color FFFFFF00,
+        and zero temperatures. Verification requires the target's profile, type and setting
+        to be absent or empty and temperatures absent, empty or zero. Color is ignored.
+        This clears slot metadata only; no PA/flow calibration commands are sent.
+        LCD behavior still requires live X2D validation. Errors may occur after metadata changed.
+      parameters:
+        - name: amsId
+          in: path
+          required: true
+          description: AMS 0..253, external left/deputy 254, external right/main 255
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 255
+        - name: trayId
+          in: path
+          required: true
+          description: Regular tray 0..3; use 0 for external holders (0..3 accepted for compatibility)
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 3
+      responses:
+        '200':
+          description: Matching reply accepted and fresh cleared target metadata verified
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Cleared'
+              example:
+                status: cleared
+                verified: true
+                elapsedMs: 1234
+                sequenceId: '20001'
+                amsId: 0
+                trayId: 3
+        '400':
+          description: invalid_request (invalid path parameters)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: not_found (unknown route; external endpoints are absent)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: request_too_large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: send_failed, printer_rejected, verification_request_failed, or backend_failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: printer_not_ready (including disconnect during write) or printer_busy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                status: error
+                error: printer_not_ready
+                message: Printer is currently not ready
+        '504':
+          description: printer_reply_timeout or verification_timeout
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 components:
   securitySchemes:
     bearerAuth:
@@ -297,6 +381,26 @@ components:
         status:
           type: string
           enum: [synced]
+        verified:
+          type: boolean
+          enum: [true]
+        elapsedMs:
+          type: integer
+          format: int64
+          minimum: 0
+        sequenceId:
+          type: string
+        amsId:
+          type: integer
+        trayId:
+          type: integer
+    Cleared:
+      type: object
+      required: [status, verified, elapsedMs, sequenceId, amsId, trayId]
+      properties:
+        status:
+          type: string
+          enum: [cleared]
         verified:
           type: boolean
           enum: [true]
