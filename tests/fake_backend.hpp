@@ -15,6 +15,7 @@ class FakeBackend : public Backend {
   BackendCallbacks callbacks;
   std::atomic<bool> auto_connect{true}, telemetry{true}, fail_send{false}, reject{false};
   std::atomic<bool> no_reply{false}, wrong_tray{false}, fail_verify{false}, disconnect_write{false};
+  std::atomic<bool> omit_result{false};
   std::atomic<bool> pre_reply_only{false}, hold_write{false}, wrong_sequence{false};
   std::atomic<bool> emit_certificate{true}, require_certificate{true};
   std::atomic<int> mismatch{0};
@@ -119,13 +120,18 @@ class FakeBackend : public Backend {
       std::lock_guard<std::mutex> lock(mutex);
       command = last_command;
     }
-    callbacks.message(
-        json{{"print",
-              {{"command", "ams_filament_setting"},
-               {"sequence_id",
-                wrong_sequence ? "unrelated" : command.at("sequence_id").get<std::string>()},
-               {"result", reject ? "fail" : "success"}}}}
-            .dump());
+    json response{{"print",
+                   {{"command", "ams_filament_setting"},
+                    {"sequence_id",
+                     wrong_sequence ? "unrelated" : command.at("sequence_id").get<std::string>()},
+                    {"result", reject ? "fail" : "success"}}}};
+    if (omit_result) response["print"].erase("result");
+    if (reject) {
+      response["print"]["reason"] = "test rejection";
+      response["print"]["err_code"] = 42;
+      response["print"]["private_extra"] = "UNLOGGED_REPLY_PAYLOAD";
+    }
+    callbacks.message(response.dump());
   }
   int send(const std::string& message) override {
     auto root = json::parse(message);

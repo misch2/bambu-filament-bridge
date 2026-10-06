@@ -1,5 +1,11 @@
 # Unreleased
 
+# 0.1.4
+
+- Restore external slot_id=0 and include slot_id equal to tray_id for normal AMS commands.
+- Accept matching ams_filament_setting ACKs without result; reject explicit result=fail while preserving post-ACK pushall and fresh telemetry verification.
+- Add wire addressing and ACK regression tests and bounded reply diagnostics.
+
 # 0.1.3
 
 - Restore external spool writes through virtual AMS IDs 254 (left) and 255 (right), fixing `invalid_request` when assigning either X2D holder.

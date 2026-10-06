@@ -269,6 +269,16 @@ void verification() {
       {"verification_timeout", 504, [](auto& b) { b.telemetry = false; }},
       {"verification_timeout", 504, [](auto& b) { b.wrong_tray = true; }},
       {"verification_timeout", 504, [](auto& b) { b.pre_reply_only = true; }},
+      {"verification_timeout", 504,
+       [](auto& b) {
+         b.omit_result = true;
+         b.telemetry = false;
+       }},
+      {"verification_timeout", 504,
+       [](auto& b) {
+         b.omit_result = true;
+         b.pre_reply_only = true;
+       }},
       {"printer_not_ready", 503, [](auto& b) { b.disconnect_write = true; }}};
   for (int ams : {0, external_left_id, external_right_id})
     for (auto& c : cases) {
@@ -299,6 +309,20 @@ void verification() {
   CHECK(j["trayId"] == 3);
   CHECK(j["sequenceId"].is_string());
   CHECK(j["elapsedMs"].is_number_integer());
+  for (bool omit_result : {false, true})
+    for (int tray = 0; tray < 4; ++tray) {
+      Fixture ack;
+      ack.fake.omit_result = omit_result;
+      auto req = request(ack.cfg);
+      req.path = "/api/v1/ams/0/trays/" + std::to_string(tray) + "/filament";
+      auto response = handle_request(req, ack.service, ack.cfg);
+      CHECK(response.status == 200);
+      CHECK(json::parse(response.body)["verified"] == true);
+      std::lock_guard<std::mutex> lock(ack.fake.mutex);
+      CHECK(ack.fake.last_command["ams_id"] == 0);
+      CHECK(ack.fake.last_command["slot_id"] == tray);
+      CHECK(ack.fake.last_command["tray_id"] == tray);
+    }
 }
 void external() {
   for (int ams : {external_left_id, external_right_id}) {
@@ -316,8 +340,12 @@ void external() {
     {
       std::lock_guard<std::mutex> lock(f.fake.mutex);
       CHECK(f.fake.last_command["ams_id"] == ams);
+      CHECK(f.fake.last_command["slot_id"] == 0);
       CHECK(f.fake.last_command["tray_id"] == 254);
     }
+    f.fake.omit_result = true;
+    CHECK(handle_request(r, f.service, f.cfg).status == 200);
+    f.fake.omit_result = false;
     for (int mismatch = 1; mismatch <= 7; ++mismatch) {
       f.fake.mismatch = mismatch;
       CHECK(handle_request(r, f.service, f.cfg).status == 504);
@@ -411,15 +439,23 @@ void logging() {
   f.fake.status_layout = 0;
   f.fake.wrong_tray = true;
   CHECK(handle_request(r, f.service, f.cfg).status == 504);
+  f.fake.wrong_tray = false;
+  f.fake.omit_result = true;
+  CHECK(handle_request(r, f.service, f.cfg).status == 200);
+  f.fake.omit_result = false;
+  f.fake.reject = true;
+  CHECK(handle_request(r, f.service, f.cfg).status == 502);
   auto output = capture.contents();
   for (const auto& secret :
        {f.cfg.http_token, f.cfg.access_code, std::string("UNLOGGED_PRIVATE_EXTRA"),
         std::string("UNLOGGED_WRONG_TOKEN")})
     CHECK(output.find(secret) == std::string::npos);
+  CHECK(output.find("UNLOGGED_REPLY_PAYLOAD") == std::string::npos);
   std::map<unsigned long long, json> received;
   std::set<std::string> sent_sequences, timeout_reasons;
   bool saw_filament = false, saw_missing_profile = false, saw_temp = false;
   bool saw_reply_timeout = false, saw_correlated_success = false;
+  bool saw_missing_result = false, saw_success_result = false, saw_rejected_reply = false;
   std::istringstream lines(output);
   std::string line;
   while (std::getline(lines, line)) {
@@ -443,7 +479,23 @@ void logging() {
     }
     if (event["event"] == "send") {
       sent_sequences.insert(event["sequenceId"].get<std::string>());
+      CHECK(event["wireSlotId"] == (event["amsId"] == 254 ? 0 : 3));
       if (event["amsId"] == 254) CHECK(event["wireTrayId"] == 254);
+    }
+    if (event["event"] == "reply_received") {
+      CHECK(event["reply_received"] == true);
+      if (!event.contains("result")) {
+        CHECK(event["accepted"] == true);
+        saw_missing_result = true;
+      } else if (event["result"] == "success") {
+        CHECK(event["accepted"] == true);
+        saw_success_result = true;
+      } else if (event["result"] == "fail") {
+        CHECK(event["accepted"] == false);
+        CHECK(event["reason"] == "test rejection");
+        CHECK(event["err_code"] == 42);
+        saw_rejected_reply = true;
+      }
     }
     if (event["event"] == "request_completed") {
       CHECK(received.count(event["requestId"].get<unsigned long long>()) == 1);
@@ -466,6 +518,7 @@ void logging() {
   }
   CHECK(saw_filament && saw_missing_profile && saw_temp && saw_reply_timeout &&
         saw_correlated_success);
+  CHECK(saw_missing_result && saw_success_result && saw_rejected_reply);
   CHECK(timeout_reasons == std::set<std::string>({"no_fresh_status", "target_slot_missing",
                                                   "slot_metadata_mismatch"}));
 }

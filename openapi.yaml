@@ -81,7 +81,8 @@ paths:
       operationId: setAmsFilament
       summary: Update and verify AMS or external slot metadata
       description: >-
-        Success requires send success, a success reply for this command, and fresh
+        Success requires send success, a matching command/sequence ACK without
+        explicit result=fail (result may be absent), and fresh
         matching target-slot telemetry after that reply and a new pushall request.
         setting_id is compared when present in telemetry; stock telemetry may omit
         it. Commands are serialized. Queue wait is bounded to one second; printer
@@ -91,7 +92,8 @@ paths:
         AMS IDs 0..253 address regular trays. External holders use virtual AMS
         IDs 254 (left/deputy) and 255 (right/main, or the single external holder).
         For external holders use trayId 0; the bridge preserves the prototype's
-        wire tray_id 254 and verifies vir_slot by virtual ID. Legacy vt_tray
+        wire tray_id 254 with slot_id 0 and verifies vir_slot by virtual ID.
+        Normal AMS commands use slot_id equal to tray_id. Legacy vt_tray
         telemetry can verify only ID 255. No separate external endpoint exists.
       parameters:
         - name: amsId

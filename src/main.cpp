@@ -1,4 +1,4 @@
-﻿// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 #include <pthread.h>
 
 #include <csignal>
@@ -19,7 +19,7 @@ int main() try {
   auto config = bfb::load_config();
   bfb::ensure_config(config);
   auto backend = bfb::make_plugin_backend(config);
-  std::cout << "[bridge] version=0.1.3 backend=" << backend->name()
+  std::cout << "[bridge] version=0.1.4 backend=" << backend->name()
             << " pluginVersion=" << backend->version() << " printerId=" << config.printer_id
             << std::endl;
   bfb::BridgeService service(*backend);

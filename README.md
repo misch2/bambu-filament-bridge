@@ -387,7 +387,11 @@ curl --fail-with-body -X POST "$BAMBU_BRIDGE_URL/api/v1/ams/254/trays/0/filament
 ```
 
 Use ID 255 for the right holder. Capabilities reports `externalFilamentWrite=true`.
-Success still requires a printer success reply and fresh matching holder telemetry;
+Success requires a matching command/sequence ACK without explicit `result=fail`
+(the printer may omit `result`) and fresh matching holder telemetry after a new
+post-ACK pushall. The ACK alone never produces `verified=true`.
+Commands include `slot_id`: the tray index for normal AMS, or 0 for external
+holders (both retain wire `tray_id=254`).
 see [compatibility and validation scope](docs/compatibility.md).
 
 ---

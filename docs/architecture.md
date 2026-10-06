@@ -38,7 +38,8 @@ Verification is intentionally strict:
 
 1. Begin tracking the unique command sequence before send.
 2. Require send success and `ams_filament_setting` reply with matching sequence
-   and `result=success`.
+   unless it explicitly reports `result=fail`. A matching ACK without `result`
+   is accepted too; acceptance alone never verifies the write.
 3. Record status counter and receive-time boundary **after** that reply, then
    issue a fresh pushall with another unique sequence.
 4. Require post-boundary telemetry in the same session, containing the target
@@ -48,7 +49,8 @@ Verification is intentionally strict:
    retained when absent. There is no cached-slot merge used for verification.
 
 External IDs 254 (left/deputy) and 255 (right/main) share the serialized command
-path. Both preserve the prototype's wire `tray_id=254`; the API response echoes
+path. Both use wire `slot_id=0` and `tray_id=254`; normal AMS commands include
+`slot_id=tray_id`. The API response echoes
 the client's tray ID. External verification reads `vir_slot` by ID, with legacy
 `vt_tray` fallback only for ID 255. If the target exists in `vir_slot`, that entry
 is authoritative even when it mismatches and a legacy entry is also present.

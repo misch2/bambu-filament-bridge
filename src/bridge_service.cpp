@@ -126,10 +126,24 @@ void BridgeService::on_message(const std::string& message) {
     }
     if (pending_.active && pending_.epoch == epoch_) {
       if (text(print, "command") == "ams_filament_setting" &&
-          text(print, "sequence_id") == pending_.sequence && !pending_.reply &&
-          print.contains("result") && print["result"].is_string()) {
+          text(print, "sequence_id") == pending_.sequence && !pending_.reply) {
         pending_.reply = true;
-        pending_.accepted = text(print, "result") == "success";
+        pending_.accepted = text(print, "result") != "fail";
+        json detail{{"event", "reply_received"},
+                    {"sequenceId", pending_.sequence},
+                    {"reply_received", true},
+                    {"accepted", pending_.accepted}};
+        // Only bounded scalar diagnostics are logged, never nested printer payloads.
+        for (const auto* field : {"result", "reason", "err_code"}) {
+          if (std::string(field) != "result" && pending_.accepted) continue;
+          auto value = print.find(field);
+          if (value == print.end()) continue;
+          if (value->is_string())
+            detail[field] = value->get<std::string>().substr(0, 256);
+          else if (value->is_number() || value->is_boolean() || value->is_null())
+            detail[field] = *value;
+        }
+        operational_log("command", detail);
       }
       if (status && pending_.verify && status_counter_ > pending_.after &&
           received > pending_.after_time) {
@@ -349,6 +363,7 @@ WriteResult BridgeService::set_filament(int ams, int tray, const Filament& f) {
                 {{"sequence_id", result.sequence_id},
                  {"command", "ams_filament_setting"},
                  {"ams_id", ams},
+                 {"slot_id", is_external_slot(ams) ? 0 : tray},
                  // Preserve the prototype's external-slot wire encoding for both holders.
                  {"tray_id", is_external_slot(ams) ? external_left_id : tray},
                  {"tray_info_idx", f.profile},
@@ -362,6 +377,7 @@ WriteResult BridgeService::set_filament(int ams, int tray, const Filament& f) {
                               {"amsId", ams},
                               {"trayId", tray},
                               {"wireAmsId", ams},
+                              {"wireSlotId", is_external_slot(ams) ? 0 : tray},
                               {"wireTrayId", is_external_slot(ams) ? external_left_id : tray},
                               {"replyTimeoutMs", timing_.reply.count()},
                               {"verificationTimeoutMs", timing_.verification.count()}});
