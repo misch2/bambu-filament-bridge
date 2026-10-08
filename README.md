@@ -360,6 +360,17 @@ elapsed time. Command logs distinguish reply timeouts from verification failures
 including missing telemetry, missing slots and mismatched fields. Headers and
 credentials are never logged; see [log details](docs/troubleshooting.md#request-and-command-logs).
 
+Failed SET/CLEAR responses include the command `sequenceId`, target IDs and bounded
+`diagnostics` alongside the existing error code. For example:
+
+```json
+{"status":"error","error":"printer_rejected","message":"Request could not be completed","verified":false,"sequenceId":"20020","elapsedMs":505,"amsId":0,"trayId":1,"diagnostics":{"operation":"set","replyReceived":true,"replyAccepted":false,"freshStatuses":0,"targetSeen":false,"printerReply":{"result":"fail"}}}
+```
+
+Optional printer reply details and last known state help compare failures with
+successful writes. See [systemd logging and printer rejection](docs/troubleshooting.md#printer-rejects-set-or-clear).
+
+
 ### Bambu Studio does not update immediately
 
 Make sure Bambu Studio has refreshed the printer state. The bridge changes the

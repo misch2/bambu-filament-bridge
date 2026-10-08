@@ -29,6 +29,7 @@ class FakeBackend : public Backend {
   std::vector<std::string> sequences;
   json last_command;
   json last_write;
+  json reply_overrides = json::object();
   Filament loaded{"GFG99", "GFSG99_15", "PETG", "808080FF", 220, 260};
   std::atomic<int> ams{0}, tray{3};
   void start(BackendCallbacks c) override { callbacks = std::move(c); }
@@ -164,6 +165,7 @@ class FakeBackend : public Backend {
       response["print"]["errno"] = 7;
       response["print"]["private_extra"] = "UNLOGGED_REPLY_PAYLOAD";
     }
+    response["print"].update(reply_overrides);
     callbacks.message(response.dump());
   }
   int send(const std::string& message) override {

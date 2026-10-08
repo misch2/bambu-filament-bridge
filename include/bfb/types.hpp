@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #pragma once
 #include <chrono>
+#include <nlohmann/json.hpp>
 #include <string>
 namespace bfb {
 constexpr int external_left_id = 254;
@@ -23,6 +24,7 @@ struct WriteResult {
   bool verified = false;
   long long elapsed_ms = 0;
   int ams_id = 0, tray_id = 0;
+  nlohmann::json diagnostics = nlohmann::json::object();
 };
 struct Timing {
   std::chrono::milliseconds reply{4000}, verification{4000}, stale{6000};

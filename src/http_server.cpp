@@ -52,6 +52,8 @@ class RequestLog {
         {"elapsedMs",
          std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - started_).count()}};
     if (body.is_object() && body.contains("error")) detail["error"] = body["error"];
+    if (body.is_object() && body.contains("diagnostics"))
+      detail["diagnostics"] = body["diagnostics"];
     event("request_completed", detail);
     return response;
   }
@@ -310,7 +312,23 @@ HttpResponse handle_request_impl(const HttpRequest& r, BridgeService& service, c
       status = 503;
     else if (result.error == "printer_reply_timeout" || result.error == "verification_timeout")
       status = 504;
-    return error_response(status, result.error);
+    auto response = error_response(status, result.error);
+    auto detail = json::parse(response.body);
+    detail["verified"] = false;
+    detail["sequenceId"] = result.sequence_id;
+    detail["elapsedMs"] = result.elapsed_ms;
+    detail["amsId"] = result.ams_id;
+    detail["trayId"] = result.tray_id;
+    auto diagnostics = result.diagnostics;
+    // Printer strings are untrusted and may coincidentally contain configured secrets.
+    for (const auto* group : {"printerReply", "printerState"}) {
+      if (!diagnostics.contains(group)) continue;
+      for (auto& value : diagnostics[group])
+        if (value.is_string()) value = redact(value.get<std::string>(), c);
+    }
+    detail["diagnostics"] = diagnostics;
+    response.body = detail.dump();
+    return response;
   }
   return {200, json{{"status", clear ? "cleared" : "synced"},
                     {"verified", true},

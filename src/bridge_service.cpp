@@ -60,8 +60,9 @@ const json* target_slot(const json& print, int ams_id, int tray_id) {
   return nullptr;
 }
 }  // namespace
-BridgeService::BridgeService(Backend& backend, Timing timing)
-    : backend_(backend), timing_(timing) {}
+BridgeService::BridgeService(Backend& backend, Timing timing,
+                             std::vector<std::string> diagnostic_secrets)
+    : backend_(backend), diagnostic_secrets_(std::move(diagnostic_secrets)), timing_(timing) {}
 BridgeService::~BridgeService() { stop(); }
 void BridgeService::start() {
   if (started_) throw std::logic_error("Bridge already started");
@@ -116,6 +117,7 @@ void BridgeService::on_connection(bool connected) {
       ++epoch_;
       ready_ = false;
       last_status_ = {};
+      printer_state_ = json::object();
       pending_.active = false;
     }
   }
@@ -135,6 +137,8 @@ void BridgeService::on_message(const std::string& message) {
     if (status) {
       last_status_ = std::max(last_status_, received);
       ++status_counter_;
+      printer_state_.update(diagnostic_scalars(print, {"gcode_state", "ams_status", "print_error"},
+                                               diagnostic_secrets_));
     }
     if (pending_.active && pending_.epoch == epoch_) {
       if (text(print, "command") == "ams_filament_setting" &&
@@ -145,16 +149,14 @@ void BridgeService::on_message(const std::string& message) {
                     {"sequenceId", pending_.sequence},
                     {"reply_received", true},
                     {"accepted", pending_.accepted}};
-        // Only bounded scalar diagnostics are logged, never nested printer payloads.
-        for (const auto* field : {"result", "reason", "err_code", "errno"}) {
-          auto value = print.find(field);
-          if (value == print.end()) continue;
-          if (value->is_string())
-            detail[std::string(field) == "err_code" ? "errCode" : field] =
-                value->get<std::string>().substr(0, 256);
-          else if (value->is_number() || value->is_boolean() || value->is_null())
-            detail[std::string(field) == "err_code" ? "errCode" : field] = *value;
+        pending_.printer_reply = diagnostic_scalars(
+            print, {"result", "reason", "err_code", "errno", "code", "message", "msg"},
+            diagnostic_secrets_);
+        if (pending_.printer_reply.contains("err_code")) {
+          pending_.printer_reply["errCode"] = pending_.printer_reply["err_code"];
+          pending_.printer_reply.erase("err_code");
         }
+        detail.update(pending_.printer_reply);
         operational_log("command", detail);
       }
       if (status && pending_.verify && status_counter_ > pending_.after &&
@@ -345,6 +347,7 @@ WriteResult BridgeService::clear_filament(int ams, int tray) {
 WriteResult BridgeService::write_filament(int ams, int tray, const Filament& f,
                                           Operation operation) {
   WriteResult result;
+  result.diagnostics["operation"] = operation == Operation::Clear ? "clear" : "set";
   result.ams_id = ams;
   result.tray_id = tray;
   const auto started = Clock::now();
@@ -362,6 +365,15 @@ WriteResult BridgeService::write_filament(int ams, int tray, const Filament& f,
       detail["replyAccepted"] = tracked && pending_.accepted;
       detail["freshStatuses"] = tracked ? pending_.fresh_statuses : 0;
       detail["targetSeen"] = tracked && pending_.target_seen;
+      if (tracked && !pending_.printer_reply.empty())
+        detail["printerReply"] = pending_.printer_reply;
+      if (!printer_state_.empty()) detail["printerState"] = printer_state_;
+      const auto state_age =
+          last_status_ == Clock::time_point{}
+              ? -1
+              : std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - last_status_)
+                    .count();
+      detail["printerStateAgeMs"] = state_age;
       if (std::string(error) == "verification_timeout") {
         detail["reason"] = pending_.fresh_statuses == 0 ? "no_fresh_status"
                            : !pending_.target_seen      ? "target_slot_missing"
@@ -375,6 +387,9 @@ WriteResult BridgeService::write_filament(int ams, int tray, const Filament& f,
     result.elapsed_ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - started).count();
     detail["elapsedMs"] = result.elapsed_ms;
+    result.diagnostics = detail;
+    for (const auto* field : {"event", "sequenceId", "amsId", "trayId", "outcome", "elapsedMs"})
+      result.diagnostics.erase(field);
     operational_log("command", detail);
     return result;
   };

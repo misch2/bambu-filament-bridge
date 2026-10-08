@@ -70,3 +70,49 @@ have reached the bridge. If `request_completed` records a result, compare its
 timestamp and status with the caller's timeout. Allow for the one-second queue
 wait, four-second reply deadline, four-second verification deadline and any
 synchronous backend call latency.
+
+## Printer rejects SET or CLEAR
+
+`printer_rejected` / HTTP 502 means the printer replied with explicit `result: fail`.
+It is different from a reply timeout or metadata verification timeout. Raising
+timeouts does not address that rejection. Both SET and CLEAR retain the reply's
+optional scalar `reason`, `errCode`, `errno`, `code`, `message` and `msg` fields.
+When the printer only reports `result: fail`, the bridge cannot manufacture a
+more specific cause. Numeric codes are preserved without guessing their meaning.
+
+Failed command responses retain `verified: false`, target IDs, `sequenceId`,
+`elapsedMs`, and `diagnostics`. The same reply and last known printer state
+(`gcode_state`, `ams_status`, `print_error`, when supplied) appear in the
+`completed` command event and the `request_completed` HTTP event. State comes
+from status messages, can be partial, and is cleared on disconnect; it does not
+prove why the printer rejected a command. `printerStateAgeMs` is the age of the
+last valid status, not of each individual cached field. Unknown fields and nested
+payloads are discarded, strings are limited to 256 bytes, and configured access
+codes and HTTP tokens are redacted.
+
+Do not blindly retry explicit rejection or verification failure: metadata may
+already have changed in other failure cases. Compare a recent successful command
+with the rejected one (target, requested profile, printer state and reply).
+The bridge continues accepting later requests after a rejected command.
+
+### Native systemd logging
+
+For the supplied unit, bridge stdout/stderr are captured by journald:
+
+```bash
+journalctl -u bambu-bridge --since '15 minutes ago' -o cat --no-pager
+journalctl -u bambu-bridge -f -o cat
+systemctl cat bambu-bridge
+```
+
+The last command shows the deployed executable and EnvironmentFile paths.
+Do not publish the contents of an EnvironmentFile containing credentials.
+Save a time window including the last successful assignment and the first
+rejection, plus connection/state events; `-f` alone only follows the tail.
+
+The bundled open-bamboo-networking backend normally logs to stderr. A separate
+file is opt-in via `OBN_LOG_FILE` or `OBN_LOG_TO_FILE=1` (then
+`<BAMBU_DATA_DIR>/obn.log`); `obn.conf` also has corresponding log settings.
+A user-supplied stock plugin may use its own logging configuration. Avoid broad
+payload tracing when sharing logs; the bridge's bounded diagnostics are sufficient
+for initial comparison.

@@ -22,7 +22,7 @@ int main() try {
   std::cout << "[bridge] version=0.1.8 backend=" << backend->name()
             << " pluginVersion=" << backend->version() << " printerId=" << config.printer_id
             << std::endl;
-  bfb::BridgeService service(*backend);
+  bfb::BridgeService service(*backend, {}, {config.http_token, config.access_code});
   bfb::HttpServer server(service, config);
   server.start();
   service.start();

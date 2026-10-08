@@ -4,13 +4,15 @@
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <thread>
+#include <vector>
 
 #include "bfb/backend.hpp"
 #include "bfb/types.hpp"
 namespace bfb {
 class BridgeService {
  public:
-  BridgeService(Backend& backend, Timing timing = {});
+  BridgeService(Backend& backend, Timing timing = {},
+                std::vector<std::string> diagnostic_secrets = {});
   ~BridgeService();
   void start();
   void stop();
@@ -33,6 +35,7 @@ class BridgeService {
   std::string next_sequence();
   int push_all();
   Backend& backend_;
+  std::vector<std::string> diagnostic_secrets_;
   Timing timing_;
   std::timed_mutex command_mutex_;
   mutable std::mutex mutex_;
@@ -42,12 +45,14 @@ class BridgeService {
   bool reconnecting_ = true, certificate_ = false;
   std::string firmware_;
   Clock::time_point last_status_{};
+  nlohmann::json printer_state_ = nlohmann::json::object();
   unsigned long long sequence_ = 20000, status_counter_ = 0, epoch_ = 0;
   struct Pending {
     bool active = false, reply = false, accepted = false, verify = false, matches = false;
     unsigned long long fresh_statuses = 0;
     bool target_seen = false;
     std::string mismatched_fields;
+    nlohmann::json printer_reply = nlohmann::json::object();
     std::string sequence;
     int ams = 0, tray = 0;
     Operation operation = Operation::Set;

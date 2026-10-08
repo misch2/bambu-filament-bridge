@@ -57,11 +57,11 @@ Timing timing() {
 }
 struct Fixture {
   FakeBackend fake;
-  BridgeService service;
   Config cfg = config();
+  BridgeService service;
   explicit Fixture(Timing t = timing(), bool start_ready = true, bool certificate_ack = true,
                    int ams = 0, int layout = 0)
-      : service(fake, t) {
+      : service(fake, t, {cfg.http_token, cfg.access_code}) {
     fake.auto_connect = start_ready;
     fake.require_certificate = fake.emit_certificate = certificate_ack;
     fake.ams = ams;
@@ -569,6 +569,98 @@ void logging() {
   CHECK(timeout_reasons == std::set<std::string>({"no_fresh_status", "target_slot_missing",
                                                   "slot_metadata_mismatch"}));
 }
+void failure_diagnostics() {
+  for (bool clear : {false, true}) {
+    Fixture f;
+    LogCapture capture;
+    f.fake.reject = true;
+    f.fake.reply_overrides = {{"code", 19},
+                              {"message", "slot unavailable"},
+                              {"msg", json::object()},
+                              {"unknown", "PRIVATE_PAYLOAD"}};
+    auto r = request(f.cfg);
+    if (clear) {
+      r.method = "DELETE";
+      r.body = "";
+    }
+    auto response = handle_request(r, f.service, f.cfg);
+    CHECK(response.status == 502);
+    auto body = json::parse(response.body);
+    CHECK(body["error"] == "printer_rejected");
+    CHECK(body["verified"] == false);
+    CHECK(body["sequenceId"].is_string() && !body["sequenceId"].get<std::string>().empty());
+    CHECK(body["amsId"] == 0 && body["trayId"] == 3);
+    CHECK(body["elapsedMs"].is_number_integer());
+    auto detail = body["diagnostics"];
+    CHECK(detail["operation"] == (clear ? "clear" : "set"));
+    CHECK(detail["replyReceived"] == true && detail["replyAccepted"] == false);
+    CHECK(detail["freshStatuses"] == 0 && detail["targetSeen"] == false);
+    CHECK(detail["printerReply"]["result"] == "fail");
+    CHECK(detail["printerReply"]["errCode"] == 42);
+    CHECK(detail["printerReply"]["code"] == 19);
+    CHECK(detail["printerReply"]["message"] == "slot unavailable");
+    CHECK(!detail["printerReply"].contains("msg"));
+    CHECK(response.body.find("PRIVATE_PAYLOAD") == std::string::npos);
+    CHECK(capture.contents().find("PRIVATE_PAYLOAD") == std::string::npos);
+    CHECK(f.fake.writes == 1);  // Explicit rejection never causes a blind retry.
+    // A failure must not poison the next command or leak an earlier reply.
+    f.fake.reject = false;
+    f.fake.reply_overrides = json::object();
+    CHECK(handle_request(r, f.service, f.cfg).status == 200);
+    f.fake.no_reply = true;
+    auto next_failure = json::parse(handle_request(r, f.service, f.cfg).body);
+    CHECK(next_failure["error"] == "printer_reply_timeout");
+    CHECK(!next_failure["diagnostics"].contains("printerReply"));
+  }
+  {
+    Fixture f;
+    LogCapture capture;
+    f.fake.reject = true;
+    f.fake.reply_overrides = {{"message", f.cfg.http_token}, {"reason", std::string(300, 'z')}};
+    auto body = json::parse(handle_request(request(f.cfg), f.service, f.cfg).body);
+    CHECK(body["diagnostics"]["printerReply"]["message"] == "[redacted]");
+    CHECK(body["diagnostics"]["printerReply"]["reason"].get<std::string>().size() == 256);
+    CHECK(capture.contents().find(f.cfg.http_token) == std::string::npos);
+  }
+  {
+    Fixture f;
+    LogCapture capture;
+    f.fake.reject = true;
+    f.fake.reply_overrides = {{"message", std::string(255, 'z') + "\xc4\x9b"},
+                              {"reason", std::string(250, 'z') + f.cfg.http_token},
+                              {"msg", "prefix:" + f.cfg.access_code + ":" + f.cfg.http_token}};
+    auto response = handle_request(request(f.cfg), f.service, f.cfg);
+    auto body = json::parse(response.body);
+    CHECK(body["diagnostics"]["printerReply"]["message"] == std::string(255, 'z'));
+    CHECK(body["diagnostics"]["printerReply"]["reason"].get<std::string>().size() == 256);
+    CHECK(body["diagnostics"]["printerReply"]["msg"] == "prefix:[redacted]:[redacted]");
+    CHECK(capture.contents().find(f.cfg.access_code) == std::string::npos);
+    CHECK(capture.contents().find(f.cfg.http_token) == std::string::npos);
+  }
+  {
+    Fixture f;
+    f.fake.telemetry = false;
+    auto body = json::parse(handle_request(request(f.cfg), f.service, f.cfg).body);
+    CHECK(body["diagnostics"]["reason"] == "no_fresh_status");
+    CHECK(body["diagnostics"]["replyAccepted"] == true);
+  }
+  {
+    Fixture f;
+    f.fake.callbacks.message(json{{"print",
+                                   {{"command", "push_status"},
+                                    {"gcode_state", "IDLE"},
+                                    {"ams_status", 0},
+                                    {"print_error", 0},
+                                    {"unknown", "PRIVATE_STATUS"}}}}
+                                 .dump());
+    f.fake.reject = true;
+    auto body = json::parse(handle_request(request(f.cfg), f.service, f.cfg).body);
+    CHECK(body["diagnostics"]["printerState"] ==
+          json({{"gcode_state", "IDLE"}, {"ams_status", 0}, {"print_error", 0}}));
+    CHECK(body["diagnostics"]["printerStateAgeMs"].get<long long>() >= 0);
+    CHECK(body.dump().find("PRIVATE_STATUS") == std::string::npos);
+  }
+}
 void concurrency() {
   auto t = timing();
   t.reply = 1s;
@@ -838,9 +930,10 @@ int main(int argc, char** argv) try {
     external();
   else if (suite == "protocol")
     protocol();
-  else if (suite == "logging")
+  else if (suite == "logging") {
     logging();
-  else if (suite == "concurrency")
+    failure_diagnostics();
+  } else if (suite == "concurrency")
     concurrency();
   else if (suite == "clear")
     clear_filament();

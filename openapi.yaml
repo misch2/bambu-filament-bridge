@@ -428,3 +428,68 @@ components:
           description: Stable machine-readable identifier; clients should allow future identifiers
         message:
           type: string
+        verified:
+          type: boolean
+          enum: [false]
+          description: Present for filament command failures
+        sequenceId:
+          type: string
+          description: Command correlation ID; empty when no command was sent
+        elapsedMs:
+          type: integer
+          format: int64
+          minimum: 0
+        amsId:
+          type: integer
+        trayId:
+          type: integer
+        diagnostics:
+          type: object
+          description: Bounded command diagnostics; omitted for non-command errors. Printer details are optional and are not interpreted as a firmware-specific error taxonomy.
+          properties:
+            operation:
+              type: string
+              enum: [set, clear]
+            replyReceived:
+              type: boolean
+            replyAccepted:
+              type: boolean
+            freshStatuses:
+              type: integer
+              minimum: 0
+            targetSeen:
+              type: boolean
+            printerStateAgeMs:
+              type: integer
+              description: Age of last valid status; -1 if unavailable. State fields may have been supplied by earlier partial statuses.
+            reason:
+              type: string
+              enum: [no_fresh_status, target_slot_missing, slot_metadata_mismatch]
+            mismatchedFields:
+              type: string
+            printerReply:
+              type: object
+              additionalProperties: false
+              properties:
+                result: { $ref: '#/components/schemas/DiagnosticScalar' }
+                reason: { $ref: '#/components/schemas/DiagnosticScalar' }
+                errCode: { $ref: '#/components/schemas/DiagnosticScalar' }
+                errno: { $ref: '#/components/schemas/DiagnosticScalar' }
+                code: { $ref: '#/components/schemas/DiagnosticScalar' }
+                message: { $ref: '#/components/schemas/DiagnosticScalar' }
+                msg: { $ref: '#/components/schemas/DiagnosticScalar' }
+            printerState:
+              type: object
+              additionalProperties: false
+              properties:
+                gcode_state: { $ref: '#/components/schemas/DiagnosticScalar' }
+                ams_status: { $ref: '#/components/schemas/DiagnosticScalar' }
+                print_error: { $ref: '#/components/schemas/DiagnosticScalar' }
+    DiagnosticScalar:
+      description: Bounded optional printer field; null is retained when supplied
+      anyOf:
+        - type: string
+          nullable: true
+          maxLength: 256
+        - type: number
+        - type: boolean
