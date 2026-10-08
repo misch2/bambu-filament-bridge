@@ -1,5 +1,10 @@
 # Unreleased
 
+# 0.1.9
+
+- Add bounded SET/CLEAR failure diagnostics, including command and target IDs, printer replies and last known printer state.
+- Improve command and HTTP logging, redact configured secrets, and document printer rejection troubleshooting and systemd logging.
+
 # 0.1.8
 
 - Promote verified filament metadata clearing to stable after the owner confirmed 0.1.7-experimental working on the live X2D.

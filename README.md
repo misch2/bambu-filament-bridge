@@ -173,7 +173,7 @@ ghcr.io/misch2/bambu-filament-bridge
 ```
 
 For production installations, prefer a versioned tag instead of `latest`.
-The current stable release is `0.1.8`, including verified metadata clearing via
+The current stable release is `0.1.9`, including verified metadata clearing via
 DELETE after the owner confirmed `0.1.7-experimental` working on the live X2D.
 The owner also reported the preceding
 `0.1.5-experimental` protocol fix working on the live X2D.

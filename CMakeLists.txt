@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
-project(bambu_filament_bridge VERSION 0.1.8 LANGUAGES CXX)
+project(bambu_filament_bridge VERSION 0.1.9 LANGUAGES CXX)
 # CMake project versions are numeric; preserve the full prerelease identity separately.
-set(BFB_VERSION "0.1.8")
+set(BFB_VERSION "0.1.9")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
