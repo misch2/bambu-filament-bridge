@@ -266,19 +266,20 @@ HttpResponse handle_request_impl(const HttpRequest& r, BridgeService& service, c
                       {"features", {{"amsFilamentWrite", true}, {"externalFilamentWrite", true}}}}
                      .dump()};
   std::smatch match;
-  if ((r.method != "POST" && r.method != "DELETE") ||
+  if ((r.method != "POST" && r.method != "DELETE" && r.method != "GET") ||
       !std::regex_match(r.path, match, filament_route))
     return error_response(404, "not_found");
   if (r.body.size() > max_body_size) return error_response(413, "request_too_large");
   int ams, tray;
   Filament f;
   const bool clear = r.method == "DELETE";
-  auto input = clear ? json::object() : json::parse(r.body, nullptr, false);
+  const bool read = r.method == "GET";
+  auto input = clear || read ? json::object() : json::parse(r.body, nullptr, false);
   if (!input.is_object()) return error_response(400, "invalid_json");
   try {
     ams = index(match[1], external_right_id, "amsId");
     tray = index(match[2], 3, "trayId");
-    if (!clear) {
+    if (!clear && !read) {
       auto content = r.headers.find("content-type");
       if (content == r.headers.end() ||
           lower(trim(content->second.substr(0, content->second.find(';')))) != "application/json")
@@ -291,6 +292,28 @@ HttpResponse handle_request_impl(const HttpRequest& r, BridgeService& service, c
   } catch (const json::exception&) {
     log.event("validation_failed", {{"field", "filament"}});
     return error_response(400, "invalid_request");
+  }
+  if (read) {
+    auto state = service.read_slot_state(ams, tray);
+    if (state.contains("error")) {
+      const auto error = state["error"].get<std::string>();
+      const int status = error == "slot_state_timeout" ? 504
+                         : error == "verification_request_failed" || error == "backend_failure"
+                             ? 502
+                             : 503;
+      auto response = error_response(status, error);
+      if (state.contains("backendReturnCode") || state.contains("backendException")) {
+        auto detail = json::parse(response.body);
+        detail["diagnostics"] = {{"failureStage", "slot_state_request"}};
+        detail["diagnostics"].update(diagnostic_scalars(
+            state, {"backendReturnCode", "backendException"}, {c.access_code, c.http_token}));
+        response.body = detail.dump();
+      }
+      return response;
+    }
+    state["printerId"] = c.printer_id;
+    state["ready"] = service.health().ready;
+    return {200, state.dump()};
   }
   if (clear)
     log.event("filament_clear_requested", {{"amsId", ams}, {"trayId", tray}});

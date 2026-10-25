@@ -23,7 +23,9 @@ def main():
     require("503" in spec["paths"]["/health"]["get"]["responses"], "Health 503 missing")
 
     filament = spec["paths"]["/api/v1/ams/{amsId}/trays/{trayId}/filament"]
-    require(set(filament) == {"post", "delete"}, "Filament methods mismatch")
+    require(set(filament) == {"get", "post", "delete"}, "Filament methods mismatch")
+    require("security" not in filament["get"] and spec["security"] == [{"bearerAuth": []}],
+            "Slot observations must require Bearer authentication")
     require("requestBody" not in filament["delete"], "DELETE must not require JSON")
     require(spec["components"]["schemas"]["Cleared"]["properties"]["status"]["enum"] == ["cleared"],
             "Clear success contract mismatch")

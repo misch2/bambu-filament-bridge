@@ -325,6 +325,42 @@ void verification() {
       CHECK(ack.fake.last_command["tray_id"] == tray);
     }
 }
+void slot_observations() {
+  auto t = timing();
+  t.stale = 100ms;
+  t.refresh = 1s;
+  Fixture f(t);
+  f.fake.callbacks.message(
+      R"({"print":{"command":"push_status","gcode_state":"IDLE","ams":{"tray_exist_bits":"8","tray_reading_bits":"0","ams":[{"id":"0","tray":[{"id":"3","tray_uuid":"EXAMPLE"}]}]}}})");
+  auto snapshot = f.service.slot_state(0, 3);
+  CHECK(snapshot["present"] == true && snapshot["reading"] == false);
+  CHECK(snapshot["trayUuid"] == "EXAMPLE" && snapshot["gcodeState"] == "IDLE");
+  CHECK(f.service.slot_state(0, 2)["present"] == false);
+  CHECK(f.service.slot_state(128, 0)["present"].is_null());
+  CHECK(f.service.slot_state(255, 0)["present"].is_null());
+  auto r = request(f.cfg);
+  r.method = "GET";
+  r.body = "";
+  auto no_auth = r;
+  no_auth.headers.clear();
+  CHECK(handle_request(no_auth, f.service, f.cfg).status == 401);
+  auto response = handle_request(r, f.service, f.cfg);
+  CHECK(response.status == 200);
+  CHECK(!json::parse(response.body).contains("verified"));
+  f.fake.callbacks.message(
+      R"({"print":{"command":"push_status","ams":{"tray_exist_bits":"not hex","tray_reading_bits":{}} ,"gcode_state":"IDLE"}})");
+  CHECK(f.service.slot_state(0, 3)["present"] == true);
+  // Repeated general telemetry must not freshen old presence observations.
+  wait_until([&] {
+    f.fake.callbacks.message(R"({"print":{"command":"push_status","gcode_state":"IDLE"}})");
+    return f.service.slot_state(0, 3)["present"].is_null();
+  });
+  CHECK(f.service.health().ready);
+  f.fake.auto_connect = false;
+  f.fake.callbacks.connection(false);
+  CHECK(f.service.slot_state(0, 3)["trayUuid"].is_null());
+  CHECK(handle_request(r, f.service, f.cfg).status == 503);
+}
 void external() {
   for (int ams : {external_left_id, external_right_id}) {
     // External-only status must also establish readiness.
@@ -570,6 +606,18 @@ void logging() {
                                                   "slot_metadata_mismatch"}));
 }
 void failure_diagnostics() {
+  {
+    Fixture f;
+    LogCapture capture;
+    f.fake.fail_send = true;
+    f.fake.send_error = -37;
+    auto response = handle_request(request(f.cfg), f.service, f.cfg);
+    auto body = json::parse(response.body);
+    CHECK(response.status == 502 && body["error"] == "send_failed");
+    CHECK(body["diagnostics"]["backendReturnCode"] == -37);
+    CHECK(body["diagnostics"]["failureStage"] == "send");
+    CHECK(capture.contents().find("\"source\":\"send_failed\"") != std::string::npos);
+  }
   for (bool clear : {false, true}) {
     Fixture f;
     LogCapture capture;
@@ -922,9 +970,10 @@ int main(int argc, char** argv) try {
     configuration();
   else if (suite == "validation")
     validation();
-  else if (suite == "service")
+  else if (suite == "service") {
     state();
-  else if (suite == "verification")
+    slot_observations();
+  } else if (suite == "verification")
     verification();
   else if (suite == "external")
     external();

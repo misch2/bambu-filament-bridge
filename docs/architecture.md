@@ -11,6 +11,13 @@ server, and waits for SIGINT/SIGTERM. Signals are blocked before threads start;
 | BridgeService | Lifecycle worker, reconnect with 5..30 second backoff, command serialization, sequences, readiness, replies and verification. |
 | HTTP | Authentication, 64 KiB body limit / 16 KiB headers, validation, JSON, routes and status mapping. Four bounded workers; no direct plugin calls. |
 
+Authenticated slot reads share command serialization with writes and reconnect.
+The service requests fresh telemetry; callbacks retain only bounded slot identity,
+regular-AMS presence/reading and printer state with independent observation times.
+Disconnect/reprovision clears observations. These reads never verify a write.
+Persistent inventory intents and retry policy belong to clients such as
+SpoolmanSync; the bridge remains independent of inventory and Home Assistant.
+
 The prototype's setup order and wire payloads are retained: bind detection precedes
 connect; subscribe follows connection; initial pushall/get_version/get_access_code;
 two certificate install calls separated by an interruptible five-second delay;

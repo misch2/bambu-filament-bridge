@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #pragma once
 #include <condition_variable>
+#include <map>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <thread>
@@ -17,6 +18,8 @@ class BridgeService {
   void start();
   void stop();
   Health health() const;
+  nlohmann::json slot_state(int ams_id, int tray_id) const;
+  nlohmann::json read_slot_state(int ams_id, int tray_id);
   std::string backend_name() const { return backend_.name(); }
   std::string plugin_version() const { return backend_.version(); }
   WriteResult set_filament(int ams_id, int tray_id, const Filament& filament);
@@ -46,6 +49,11 @@ class BridgeService {
   std::string firmware_;
   Clock::time_point last_status_{};
   nlohmann::json printer_state_ = nlohmann::json::object();
+  struct Observation {
+    nlohmann::json value;
+    Clock::time_point received;
+  };
+  std::map<std::string, Observation> observations_;
   unsigned long long sequence_ = 20000, status_counter_ = 0, epoch_ = 0;
   struct Pending {
     bool active = false, reply = false, accepted = false, verify = false, matches = false;

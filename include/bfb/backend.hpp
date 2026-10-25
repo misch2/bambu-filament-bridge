@@ -2,6 +2,7 @@
 #pragma once
 #include <functional>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <string>
 
 #include "bfb/config.hpp"
@@ -25,6 +26,8 @@ class Backend {
   virtual void disconnect() = 0;
   virtual void subscribe() = 0;
   virtual int send(const std::string& payload) = 0;
+  // Bounded, redacted diagnostics only; never return raw plugin payloads.
+  virtual nlohmann::json diagnostics() const { return nlohmann::json::object(); }
   virtual bool provision(bool lan_only) = 0;
   virtual bool requires_certificate_ack() const { return true; }
   virtual void refresh() = 0;

@@ -2,9 +2,11 @@
 #include <dlfcn.h>
 
 #include <iostream>
+#include <mutex>
 #include <stdexcept>
 
 #include "bfb/backend.hpp"
+#include "bfb/log.hpp"
 #include "plugin_loader.hpp"
 namespace bfb {
 namespace pr = obn::plugin_runner;
@@ -41,8 +43,18 @@ class PluginBackend final : public Backend {
         callbacks_.certificate();
     });
     ex.set_on_user_message_fn(agent_, [](std::string, std::string) {});
-    ex.set_on_local_connect_fn(agent_, [this](int status, std::string device, std::string) {
-      if (device == config_.printer_id) callbacks_.connection(status == BBL::ConnectStatusOk);
+    ex.set_on_local_connect_fn(agent_, [this](int status, std::string device, std::string reason) {
+      if (device != config_.printer_id) return;
+      auto detail = diagnostic_scalars({{"connectionStatus", status}, {"connectionReason", reason}},
+                                       {"connectionStatus", "connectionReason"},
+                                       {config_.access_code, config_.http_token});
+      {
+        std::lock_guard<std::mutex> lock(diagnostics_mutex_);
+        connection_diagnostics_ = detail;
+      }
+      detail["event"] = "plugin_connection";
+      operational_log("backend", detail);
+      callbacks_.connection(status == BBL::ConnectStatusOk);
     });
     ex.set_on_printer_connected_fn(agent_, [](std::string) {});
     ex.set_on_server_connected_fn(agent_, [](int, int) {});
@@ -98,6 +110,10 @@ class PluginBackend final : public Backend {
   int send(const std::string& payload) override {
     return exports_.send_message_to_printer(agent_, config_.printer_id, payload, 1, 0);
   }
+  nlohmann::json diagnostics() const override {
+    std::lock_guard<std::mutex> lock(diagnostics_mutex_);
+    return connection_diagnostics_;
+  }
   bool provision(bool lan_only) override {
     exports_.install_device_cert(agent_, config_.printer_id, lan_only);
     return true;
@@ -116,6 +132,8 @@ class PluginBackend final : public Backend {
   void* agent_ = nullptr;  // opaque ABI handle owned until destroy_agent
   BackendCallbacks callbacks_;
   std::string name_;
+  mutable std::mutex diagnostics_mutex_;
+  nlohmann::json connection_diagnostics_ = nlohmann::json::object();
 };
 }  // namespace
 std::unique_ptr<Backend> make_plugin_backend(const Config& config) {

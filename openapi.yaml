@@ -77,6 +77,36 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
   /api/v1/ams/{amsId}/trays/{trayId}/filament:
+    get:
+      operationId: getSlotState
+      summary: Read fresh physical slot observations (authenticated)
+      description: >-
+        Requests pushall on the serialized command path. Returns each observation
+        with its own age; null means unknown, stale, disconnected or unsupported.
+        Presence and RFID-reading bits are decoded only for regular AMS 0..3,
+        trays 0..3. HT and external holder presence is unknown. This read is not
+        write verification and never returns verified=true. Live X2D insertion
+        qualification remains necessary; no new hardware capability is advertised.
+      parameters:
+        - { name: amsId, in: path, required: true, schema: { type: integer, minimum: 0, maximum: 255 } }
+        - { name: trayId, in: path, required: true, schema: { type: integer, minimum: 0, maximum: 3 } }
+      responses:
+        '200':
+          description: Observations with independent freshness
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SlotState'
+        '400':
+          description: Invalid slot address
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          description: Fresh status request failed; diagnostics includes backendReturnCode
+        '503':
+          description: printer_not_ready or printer_busy
+        '504':
+          description: slot_state_timeout
     post:
       operationId: setAmsFilament
       summary: Update and verify AMS or external slot metadata
@@ -450,6 +480,21 @@ components:
             operation:
               type: string
               enum: [set, clear]
+            failureStage:
+              type: string
+              enum: [readiness, send, reply, verification_request, verification, slot_state_request]
+            backendReturnCode:
+              type: integer
+              description: Exact plugin ABI return code, without guessed interpretation
+            backendException:
+              type: string
+              maxLength: 256
+            connectionStatus:
+              type: integer
+              description: Last plugin connection callback status; may predate the failed send
+            connectionReason:
+              type: string
+              maxLength: 256
             replyReceived:
               type: boolean
             replyAccepted:
@@ -485,6 +530,22 @@ components:
                 gcode_state: { $ref: '#/components/schemas/DiagnosticScalar' }
                 ams_status: { $ref: '#/components/schemas/DiagnosticScalar' }
                 print_error: { $ref: '#/components/schemas/DiagnosticScalar' }
+    SlotState:
+      type: object
+      required: [printerId, ready, amsId, trayId, present, reading, trayUuid, gcodeState, presentAgeMs, readingAgeMs, trayUuidAgeMs, gcodeStateAgeMs]
+      properties:
+        printerId: { type: string }
+        ready: { type: boolean }
+        amsId: { type: integer }
+        trayId: { type: integer }
+        present: { type: boolean, nullable: true }
+        reading: { type: boolean, nullable: true }
+        trayUuid: { type: string, nullable: true, maxLength: 256 }
+        gcodeState: { type: string, nullable: true, maxLength: 256 }
+        presentAgeMs: { type: integer, format: int64, minimum: -1 }
+        readingAgeMs: { type: integer, format: int64, minimum: -1 }
+        trayUuidAgeMs: { type: integer, format: int64, minimum: -1 }
+        gcodeStateAgeMs: { type: integer, format: int64, minimum: -1 }
     DiagnosticScalar:
       description: Bounded optional printer field; null is retained when supplied
       anyOf:

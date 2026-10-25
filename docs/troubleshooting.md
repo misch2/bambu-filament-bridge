@@ -1,5 +1,39 @@
 # Troubleshooting
 
+## Retry and insertion clients
+
+The bridge reconnects automatically but does not replay failed writes. A client
+may retain the current desired metadata and retry transient failures with bounded
+backoff. It must invalidate an old request when a newer assignment or clear
+supersedes it. An explicit `printer_rejected` is not a transient transport error.
+An HTTP timeout can occur after a write took effect. Every new attempt must still
+receive its own accepted reply and fresh matching status before reporting verified
+success. Reading matching metadata alone does not establish that contract.
+
+For insertion workflows, authenticated `GET /api/v1/ams/{amsId}/trays/{trayId}/filament`
+requests a fresh pushall using the serialized printer path. It returns `printerId`,
+`ready`, target IDs, `present`, `reading`, `trayUuid`, `gcodeState` and an independent
+`<field>AgeMs` for each observation. Null means unknown/stale/unsupported; age -1
+means no observation in this session. General status must not refresh old presence
+or RFID fields. Presence and reading bitmaps are decoded only for regular AMS IDs
+0..3, trays 0..3. External/HT presence is intentionally unknown. This addition has
+fake-backend tests; automated X2D insertion still needs opt-in hardware qualification.
+
+Failed writes now include `failureStage`, the exact `backendReturnCode` when an
+ABI call failed, bounded/redacted `backendException` when available, and the last
+plugin connection callback's `connectionStatus`/`connectionReason`. These are
+observations, not inferred explanations. `[backend] plugin_connection` records the
+callback; `[connection] invalidated` with `source=send_failed` records when the
+bridge itself invalidated readiness after a send failure.
+
+The default Docker backend additionally logs the original Mosquitto publish return
+code and `mosquitto_strerror` text at warning level, plus `systemErrno` for an
+OS-level `MOSQ_ERR_ERRNO`, before the ABI collapses it to
+`BAMBU_NETWORK_ERR_SEND_MSG_FAILED`. It logs neither payload nor topic. Correlate
+this line with the serialized bridge command and its sequence/time. This is a
+logging-only build patch; a user-supplied stock plugin can expose only the
+diagnostics its ABI/callbacks supply. Enabling broad payload trace is unnecessary.
+
 | Symptom | Check |
 | --- | --- |
 | `/health` returns 503 | Process is alive. Check connected/ready/reconnecting, mode, IP, LAN code and plugin version in logs. Wait for provisioning/reconnect. |

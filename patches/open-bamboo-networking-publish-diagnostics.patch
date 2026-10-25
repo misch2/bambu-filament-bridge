@@ -1,0 +1,35 @@
+--- a/src/mqtt_client.cpp
++++ b/src/mqtt_client.cpp
+@@ -513,7 +513,11 @@
+ 
+ int Client::publish(const std::string& topic, const std::string& payload, int qos, bool retain)
+ {
+-    if (!mosq_) return MOSQ_ERR_INVAL;
++    if (!mosq_) {
++        OBN_WARN("mqtt publish failed rc=%d reason=%s", MOSQ_ERR_INVAL,
++                 ::mosquitto_strerror(MOSQ_ERR_INVAL));
++        return MOSQ_ERR_INVAL;
++    }
+     // Symmetric to s_on_message: log every outgoing publish under TRACE.
+     // Lets `OBN_LOG_LEVEL=trace` capture both directions of the MQTT
+     // conversation in one log file, without rebuilding the plugin or
+@@ -523,13 +527,18 @@
+               topic.c_str(), payload.size(), qos, retain ? 1 : 0);
+     OBN_TRACE("mqtt publish payload=%.*s",
+               static_cast<int>(payload.size()), payload.data());
+-    return ::mosquitto_publish(mosq_,
++    const int rc = ::mosquitto_publish(mosq_,
+                                nullptr,
+                                topic.c_str(),
+                                static_cast<int>(payload.size()),
+                                payload.data(),
+                                qos,
+                                retain);
++    const int system_errno = rc == MOSQ_ERR_ERRNO ? errno : 0;
++    if (rc != MOSQ_ERR_SUCCESS)
++        OBN_WARN("mqtt publish failed rc=%d reason=%s systemErrno=%d qos=%d bytes=%zu", rc,
++                 ::mosquitto_strerror(rc), system_errno, qos, payload.size());
++    return rc;
+ }
+ 
+ void Client::disconnect()

@@ -18,6 +18,14 @@ Upstream: <https://github.com/ClusterM/open-bamboo-networking>. Build plugin ABI
 `0x020802`, reported compatibility version `02.08.02.99`. This pin has local build
 and loader validation, **not** a new real-X2D verification claim.
 
+The Docker build applies `patches/open-bamboo-networking-publish-diagnostics.patch`
+to its build copy of the pinned source. This AGPL logging-only change records
+Mosquitto publish failure codes and their library-provided text without topics or
+payloads. `git apply --check` fails if upstream source drifts. The checked-out
+submodule and its upstream copyright/license notices remain unchanged. For an
+equivalent native open-backend build, apply this patch to a separate copy of that
+exact pinned source before compiling it.
+
 No proprietary Bambu plugin, signing keys, user certificates, access codes, cloud
 tokens or slicer credentials are distributed. A stock plugin can only be supplied
 by the operator using a read-only mount and `BAMBU_PLUGIN`. The stock plugin is

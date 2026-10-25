@@ -16,6 +16,7 @@ class FakeBackend : public Backend {
   std::atomic<bool> auto_connect{true}, telemetry{true}, fail_send{false}, reject{false};
   std::atomic<bool> no_reply{false}, wrong_tray{false}, fail_verify{false}, disconnect_write{false};
   std::atomic<bool> omit_result{false};
+  std::atomic<int> send_error{-1};
   std::atomic<bool> pre_reply_only{false}, hold_write{false}, wrong_sequence{false},
       wrong_command{false};
   std::atomic<bool> emit_certificate{true}, require_certificate{true};
@@ -196,7 +197,7 @@ class FakeBackend : public Backend {
         if (!no_reply && !hold_write) reply();
       }
       --overlapping;
-      return fail_send ? -1 : 0;
+      return fail_send ? send_error.load() : 0;
     }
     if (root.contains("pushing")) {
       if (writes > 0 && fail_verify) return -1;

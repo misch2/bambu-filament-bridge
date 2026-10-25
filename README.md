@@ -10,6 +10,10 @@ When you assign a spool in SpoolmanSync, the bridge can update the corresponding
 AMS tray or external holder in the printer as well. Bambu Studio then sees the same filament type,
 color and profile that your inventory system says is loaded.
 
+Clients can read authenticated slot observations with
+`GET /api/v1/ams/{amsId}/trays/{trayId}/filament`. Each observation has its own
+age; unknown or stale values are `null`. See [retry and insertion clients](docs/troubleshooting.md#retry-and-insertion-clients).
+
 ```mermaid
 flowchart TD
   Spoolman[Spoolman]

@@ -107,6 +107,64 @@ Health BridgeService::health() const {
   bool ready = ready_ && connected_ && !stopping_ && age >= 0 && age <= timing_.stale.count();
   return {connected_, ready, reconnecting_ || !ready, firmware_, age};
 }
+nlohmann::json BridgeService::slot_state(int ams, int tray) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  json result{{"amsId", ams}, {"trayId", tray}};
+  const auto now = Clock::now();
+  const auto prefix = std::to_string(ams) + "/" + std::to_string(tray) + "/";
+  for (const auto* field : {"present", "reading", "trayUuid", "gcodeState"}) {
+    auto found = observations_.find(std::string(field) == "gcodeState" ? field : prefix + field);
+    const auto age =
+        found == observations_.end()
+            ? -1
+            : std::chrono::duration_cast<std::chrono::milliseconds>(now - found->second.received)
+                  .count();
+    const bool fresh =
+        connected_ && ready_ && !stopping_ && age >= 0 && age <= timing_.stale.count();
+    result[field] = fresh ? found->second.value : json(nullptr);
+    result[std::string(field) + "AgeMs"] = age;
+  }
+  return result;
+}
+nlohmann::json BridgeService::read_slot_state(int ams, int tray) {
+  if (!health().ready) return {{"error", "printer_not_ready"}};
+  std::unique_lock<std::timed_mutex> command(command_mutex_, std::defer_lock);
+  if (!command.try_lock_for(std::chrono::seconds(1))) return {{"error", "printer_busy"}};
+  if (!health().ready) return {{"error", "printer_not_ready"}};
+  unsigned long long before, epoch;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    before = status_counter_;
+    epoch = epoch_;
+  }
+  const auto requested = Clock::now();
+  int rc;
+  try {
+    rc = push_all();
+  } catch (const std::exception& e) {
+    auto detail = diagnostic_scalars({{"backendException", e.what()}}, {"backendException"},
+                                     diagnostic_secrets_);
+    detail["event"] = "slot_state_request_failed";
+    operational_log("backend", detail);
+    detail["error"] = "backend_failure";
+    on_connection(false);
+    return detail;
+  }
+  if (rc != 0) {
+    operational_log("backend", {{"event", "slot_state_request_failed"}, {"backendReturnCode", rc}});
+    return {{"error", "verification_request_failed"}, {"backendReturnCode", rc}};
+  }
+  {
+    std::unique_lock<std::mutex> lock(mutex_);
+    cv_.wait_for(lock, timing_.telemetry, [&] {
+      return stopping_ || epoch_ != epoch || (status_counter_ > before && last_status_ > requested);
+    });
+    if (stopping_ || epoch_ != epoch) return {{"error", "printer_not_ready"}};
+    if (status_counter_ <= before || last_status_ <= requested)
+      return {{"error", "slot_state_timeout"}};
+  }
+  return slot_state(ams, tray);
+}
 void BridgeService::on_connection(bool connected) {
   bool changed;
   {
@@ -118,6 +176,7 @@ void BridgeService::on_connection(bool connected) {
       ready_ = false;
       last_status_ = {};
       printer_state_ = json::object();
+      observations_.clear();
       pending_.active = false;
     }
   }
@@ -139,6 +198,37 @@ void BridgeService::on_message(const std::string& message) {
       ++status_counter_;
       printer_state_.update(diagnostic_scalars(print, {"gcode_state", "ams_status", "print_error"},
                                                diagnostic_secrets_));
+      if (print.contains("gcode_state") && print["gcode_state"].is_string())
+        observations_["gcodeState"] = {
+            diagnostic_scalars(print, {"gcode_state"}, diagnostic_secrets_)["gcode_state"],
+            received};
+      // Presence is independent of metadata. Only decode the established 4x4
+      // regular AMS bitmap; external/HT presence remains unknown.
+      for (int ams = 0; ams < 4; ++ams) {
+        for (int tray = 0; tray < 4; ++tray) {
+          const auto prefix = std::to_string(ams) + "/" + std::to_string(tray) + "/";
+          if (print.contains("ams") && print["ams"].is_object()) {
+            for (const auto& field : {std::pair{"tray_exist_bits", "present"},
+                                      std::pair{"tray_reading_bits", "reading"}}) {
+              const auto bits = text(print["ams"], field.first);
+              unsigned int value = 0;
+              const auto parsed =
+                  std::from_chars(bits.data(), bits.data() + bits.size(), value, 16);
+              if (!bits.empty() && bits.size() <= 8 && parsed.ec == std::errc{} &&
+                  parsed.ptr == bits.data() + bits.size())
+                observations_[prefix + field.second] = {(value & (1u << (ams * 4 + tray))) != 0,
+                                                        received};
+            }
+          }
+          if (const auto* slot = target_slot(print, ams, tray)) {
+            auto uuid = slot->find("tray_uuid");
+            if (uuid != slot->end() && uuid->is_string())
+              observations_[prefix + "trayUuid"] = {
+                  diagnostic_scalars(*slot, {"tray_uuid"}, diagnostic_secrets_)["tray_uuid"],
+                  received};
+          }
+        }
+      }
     }
     if (pending_.active && pending_.epoch == epoch_) {
       if (text(print, "command") == "ams_filament_setting" &&
@@ -233,12 +323,16 @@ bool BridgeService::bring_up(bool reconnect) {
     reconnecting_ = true;
     ready_ = connected_ = certificate_ = false;
     last_status_ = {};
+    observations_.clear();
     ++epoch_;
     pending_.active = false;
   }
   std::cout << "[state] " << (reconnect ? "RECONNECTING" : "CONNECTING") << std::endl;
-  auto fail = [&](const char* error) {
-    std::cerr << "[connection] " << error << std::endl;
+  auto fail = [&](const char* error, json detail = json::object()) {
+    detail["event"] = "connection_failed";
+    detail["reason"] = error;
+    detail.update(backend_.diagnostics());
+    operational_log("connection", detail);
     backend_.disconnect();
     on_connection(false);
     return false;
@@ -248,12 +342,14 @@ bool BridgeService::bring_up(bool reconnect) {
     if (!pause(timing_.disconnect_delay)) return false;
   }
   std::string firmware;
-  if (backend_.detect(firmware) != 0) return fail("bind_detect failed");
+  const int detect_rc = backend_.detect(firmware);
+  if (detect_rc != 0) return fail("bind_detect failed", {{"backendReturnCode", detect_rc}});
   {
     std::lock_guard<std::mutex> lock(mutex_);
     firmware_ = firmware.size() <= 256 ? firmware : "";
   }
-  if (backend_.connect() != 0) return fail("connect_printer failed");
+  const int connect_rc = backend_.connect();
+  if (connect_rc != 0) return fail("connect_printer failed", {{"backendReturnCode", connect_rc}});
   {
     std::unique_lock<std::mutex> lock(mutex_);
     cv_.wait_for(lock, timing_.connect, [this] { return stopping_ || connected_; });
@@ -264,7 +360,8 @@ bool BridgeService::bring_up(bool reconnect) {
     }
   }
   backend_.subscribe();
-  if (push_all() != 0) return fail("initial pushall failed");
+  const int initial_rc = push_all();
+  if (initial_rc != 0) return fail("initial pushall failed", {{"backendReturnCode", initial_rc}});
   backend_.send(
       json{{"info", {{"sequence_id", next_sequence()}, {"command", "get_version"}}}}.dump());
   backend_.send(
@@ -294,7 +391,9 @@ bool BridgeService::bring_up(bool reconnect) {
     before = status_counter_;
     epoch = epoch_;
   }
-  if (push_all() != 0) return fail("post-provision pushall failed");
+  const int provision_rc = push_all();
+  if (provision_rc != 0)
+    return fail("post-provision pushall failed", {{"backendReturnCode", provision_rc}});
   {
     std::unique_lock<std::mutex> lock(mutex_);
     cv_.wait_for(lock, timing_.telemetry, [&] {
@@ -329,8 +428,11 @@ void BridgeService::run() {
         std::lock_guard<std::timed_mutex> command(command_mutex_);
         backend_.refresh();
       }
-    } catch (const std::exception&) {
-      std::cerr << "[connection] backend operation failed" << std::endl;
+    } catch (const std::exception& e) {
+      auto detail = diagnostic_scalars({{"backendException", e.what()}}, {"backendException"},
+                                       diagnostic_secrets_);
+      detail["event"] = "backend_operation_failed";
+      operational_log("connection", detail);
       on_connection(false);
       if (!pause(backoff)) break;
       backoff = std::min(backoff * 2, timing_.retry_max);
@@ -351,6 +453,8 @@ WriteResult BridgeService::write_filament(int ams, int tray, const Filament& f,
   result.ams_id = ams;
   result.tray_id = tray;
   const auto started = Clock::now();
+  json backend_detail = json::object();
+  const char* stage = "readiness";
   auto fail = [&](const char* error) {
     json detail{{"event", "completed"},
                 {"sequenceId", result.sequence_id},
@@ -388,6 +492,10 @@ WriteResult BridgeService::write_filament(int ams, int tray, const Filament& f,
         std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - started).count();
     detail["elapsedMs"] = result.elapsed_ms;
     result.diagnostics = detail;
+    result.diagnostics.update(backend_detail);
+    result.diagnostics["failureStage"] = stage;
+    detail.update(backend_detail);
+    detail["failureStage"] = stage;
     for (const auto* field : {"event", "sequenceId", "amsId", "trayId", "outcome", "elapsedMs"})
       result.diagnostics.erase(field);
     operational_log("command", detail);
@@ -446,11 +554,20 @@ WriteResult BridgeService::write_filament(int ams, int tray, const Filament& f,
                               {"replyTimeoutMs", timing_.reply.count()},
                               {"verificationTimeoutMs", timing_.verification.count()}});
   try {
-    if (backend_.send(payload.dump()) != 0) {
+    stage = "send";
+    const int send_rc = backend_.send(payload.dump());
+    if (send_rc != 0) {
+      backend_detail = backend_.diagnostics();
+      backend_detail["backendReturnCode"] = send_rc;
+      operational_log("connection", {{"event", "invalidated"},
+                                     {"source", "send_failed"},
+                                     {"backendReturnCode", send_rc},
+                                     {"sequenceId", result.sequence_id}});
       on_connection(false);
       return fail("send_failed");
     }
     {
+      stage = "reply";
       std::unique_lock<std::mutex> lock(mutex_);
       cv_.wait_for(lock, timing_.reply, [this] { return !pending_.active || pending_.reply; });
       if (!pending_.active) {
@@ -472,8 +589,15 @@ WriteResult BridgeService::write_filament(int ams, int tray, const Filament& f,
     operational_log("command", {{"event", "reply_accepted"}, {"sequenceId", result.sequence_id}});
     operational_log("command",
                     {{"event", "verification_requested"}, {"sequenceId", result.sequence_id}});
-    if (push_all() != 0) return fail("verification_request_failed");
+    stage = "verification_request";
+    const int verify_rc = push_all();
+    if (verify_rc != 0) {
+      backend_detail = backend_.diagnostics();
+      backend_detail["backendReturnCode"] = verify_rc;
+      return fail("verification_request_failed");
+    }
     {
+      stage = "verification";
       std::unique_lock<std::mutex> lock(mutex_);
       cv_.wait_for(lock, timing_.verification,
                    [this] { return !pending_.active || pending_.matches; });
@@ -498,7 +622,10 @@ WriteResult BridgeService::write_filament(int ams, int tray, const Filament& f,
                                 {"outcome", "verified"},
                                 {"elapsedMs", result.elapsed_ms}});
     return result;
-  } catch (const std::exception&) {
+  } catch (const std::exception& e) {
+    backend_detail = backend_.diagnostics();
+    backend_detail.update(diagnostic_scalars({{"backendException", e.what()}}, {"backendException"},
+                                             diagnostic_secrets_));
     on_connection(false);
     return fail("backend_failure");
   }

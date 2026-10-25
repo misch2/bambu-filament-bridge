@@ -7,6 +7,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /src
 FROM toolchain AS plugin
 COPY third_party/open-bamboo-networking /src/open-bamboo-networking
+COPY patches/open-bamboo-networking-publish-diagnostics.patch /src/publish-diagnostics.patch
+# Apply only to the build copy, preserving the exact upstream submodule pin.
+RUN cd /src/open-bamboo-networking && git apply --ignore-space-change --check /src/publish-diagnostics.patch \
+    && git apply --ignore-space-change /src/publish-diagnostics.patch
 # Resolve Debian's target multiarch paths explicitly for emulated builds.
 RUN set -eu; \
     libdir="/usr/lib/$(cc -print-multiarch)"; \
