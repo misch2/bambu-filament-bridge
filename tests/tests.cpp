@@ -335,6 +335,7 @@ void slot_observations() {
   auto snapshot = f.service.slot_state(0, 3);
   CHECK(snapshot["present"] == true && snapshot["reading"] == false);
   CHECK(snapshot["trayUuid"] == "EXAMPLE" && snapshot["gcodeState"] == "IDLE");
+  CHECK(snapshot["metadataCleared"].is_null());  // UUID alone is insufficient.
   CHECK(f.service.slot_state(0, 2)["present"] == false);
   CHECK(f.service.slot_state(128, 0)["present"].is_null());
   CHECK(f.service.slot_state(255, 0)["present"].is_null());
@@ -347,18 +348,63 @@ void slot_observations() {
   auto response = handle_request(r, f.service, f.cfg);
   CHECK(response.status == 200);
   CHECK(!json::parse(response.body).contains("verified"));
+  CHECK(json::parse(response.body)["metadataCleared"] == false);
+  CHECK(json::parse(response.body)["metadataClearedAgeMs"].is_number_integer());
   f.fake.callbacks.message(
       R"({"print":{"command":"push_status","ams":{"tray_exist_bits":"not hex","tray_reading_bits":{}} ,"gcode_state":"IDLE"}})");
   CHECK(f.service.slot_state(0, 3)["present"] == true);
+  auto observe_metadata = [&](json slot, int ams = 0) {
+    f.fake.callbacks.message(json{{"print", {{"command", "push_status"},
+        {"ams", {{"ams", json::array({{{"id", std::to_string(ams)},
+                                      {"tray", json::array({slot})}}})}}}}}}.dump());
+    return f.service.slot_state(ams, 3);
+  };
+  const json empty{{"id", "3"}, {"tray_info_idx", ""}, {"tray_type", ""},
+                   {"setting_id", ""}, {"nozzle_temp_min", 0}, {"nozzle_temp_max", "0"}};
+  CHECK(observe_metadata(empty)["metadataCleared"] == true);
+  auto no_setting = empty;
+  no_setting.erase("setting_id");
+  CHECK(observe_metadata(no_setting)["metadataCleared"] == true);
+  CHECK(observe_metadata(empty, 128)["metadataCleared"].is_null());
+  for (auto field : {"tray_info_idx", "tray_type", "nozzle_temp_min", "nozzle_temp_max"}) {
+    auto partial = empty;
+    partial.erase(field);
+    CHECK(observe_metadata(partial)["metadataCleared"].is_null());
+  }
+  CHECK(observe_metadata({{"id", "3"}})["metadataCleared"].is_null());
+  for (auto field : {"tray_info_idx", "tray_type", "setting_id", "nozzle_temp_min", "nozzle_temp_max"}) {
+    auto populated = empty;
+    populated[field] = std::string(field).find("nozzle_temp_") == 0 ? json(200) : json("PLA");
+    CHECK(observe_metadata(populated)["metadataCleared"] == false);
+    auto malformed = empty;
+    malformed[field] = json::object();
+    CHECK(observe_metadata(malformed)["metadataCleared"].is_null());
+  }
+  for (auto value : {json("invalid"), json(-1), json(401), json(true), json(nullptr)}) {
+    auto malformed = empty;
+    malformed["nozzle_temp_min"] = value;
+    CHECK(observe_metadata(malformed)["metadataCleared"].is_null());
+  }
+  // A new partial slot must invalidate an earlier complete conclusion.
+  CHECK(observe_metadata(empty)["metadataCleared"] == true);
+  CHECK(observe_metadata({{"id", "3"}, {"tray_info_idx", ""}})["metadataCleared"].is_null());
+  CHECK(observe_metadata(empty)["metadataCleared"] == true);
+  auto unrelated = empty;
+  unrelated["id"] = "2";
+  unrelated["tray_type"] = "PLA";
+  CHECK(observe_metadata(unrelated)["metadataCleared"] == true);
   // Repeated general telemetry must not freshen old presence observations.
   wait_until([&] {
     f.fake.callbacks.message(R"({"print":{"command":"push_status","gcode_state":"IDLE"}})");
-    return f.service.slot_state(0, 3)["present"].is_null();
+    const auto state = f.service.slot_state(0, 3);
+    return state["present"].is_null() && state["metadataCleared"].is_null();
   });
   CHECK(f.service.health().ready);
   f.fake.auto_connect = false;
   f.fake.callbacks.connection(false);
   CHECK(f.service.slot_state(0, 3)["trayUuid"].is_null());
+  CHECK(f.service.slot_state(0, 3)["metadataCleared"].is_null());
+  CHECK(f.service.slot_state(0, 3)["metadataClearedAgeMs"] == -1);
   CHECK(handle_request(r, f.service, f.cfg).status == 503);
 }
 void external() {

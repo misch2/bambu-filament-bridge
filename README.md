@@ -442,6 +442,18 @@ with or endorsed by Bambu Lab.
 
 ## Verified metadata clear
 
+Before deciding whether a reset is needed, clients can read the authenticated
+filament-slot GET endpoint. It includes independent `metadataCleared` and
+`metadataClearedAgeMs` observations for regular AMS slots (IDs 0..3). True requires
+explicit empty profile/material and empty or zero nozzle temperatures in one
+target-slot snapshot; `setting_id` must be empty if present, but may be omitted by
+stock telemetry. False means metadata remains. Incomplete, malformed, stale or
+unsupported observations are null; an ID-only tray is not evidence of cleared
+metadata. Presence remains independent. A client can skip an unnecessary CLEAR
+when fresh observations confirm both absence and cleared metadata, but must not
+describe that no-op as a verified write. DELETE retains its existing verification
+contract below.
+
 `DELETE /api/v1/ams/{amsId}/trays/{trayId}/filament` clears the selected slot's
 filament metadata. Use the same Bearer token as POST; no body or Content-Type is required.
 Regular AMS targets use their AMS ID and tray 0..3. X2D external holders use

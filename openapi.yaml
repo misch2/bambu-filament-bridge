@@ -532,7 +532,7 @@ components:
                 print_error: { $ref: '#/components/schemas/DiagnosticScalar' }
     SlotState:
       type: object
-      required: [printerId, ready, amsId, trayId, present, reading, trayUuid, gcodeState, presentAgeMs, readingAgeMs, trayUuidAgeMs, gcodeStateAgeMs]
+      required: [printerId, ready, amsId, trayId, present, reading, trayUuid, gcodeState, presentAgeMs, readingAgeMs, trayUuidAgeMs, gcodeStateAgeMs, metadataCleared, metadataClearedAgeMs]
       properties:
         printerId: { type: string }
         ready: { type: boolean }
@@ -542,10 +542,20 @@ components:
         reading: { type: boolean, nullable: true }
         trayUuid: { type: string, nullable: true, maxLength: 256 }
         gcodeState: { type: string, nullable: true, maxLength: 256 }
+        metadataCleared:
+          type: boolean
+          nullable: true
+          description: >-
+            Regular AMS 0..3 only. True requires explicit empty tray_info_idx and
+            tray_type and empty/zero nozzle_temp_min/max in a single target-slot
+            snapshot, with setting_id empty if supplied. False means metadata
+            remains. Null means incomplete, malformed, stale or unsupported
+            telemetry. Presence is independent; this is not write verification.
         presentAgeMs: { type: integer, format: int64, minimum: -1 }
         readingAgeMs: { type: integer, format: int64, minimum: -1 }
         trayUuidAgeMs: { type: integer, format: int64, minimum: -1 }
         gcodeStateAgeMs: { type: integer, format: int64, minimum: -1 }
+        metadataClearedAgeMs: { type: integer, format: int64, minimum: -1 }
     DiagnosticScalar:
       description: Bounded optional printer field; null is retained when supplied
       anyOf:

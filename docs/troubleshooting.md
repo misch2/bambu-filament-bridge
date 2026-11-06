@@ -124,6 +124,17 @@ last valid status, not of each individual cached field. Unknown fields and neste
 payloads are discarded, strings are limited to 256 bytes, and configured access
 codes and HTTP tokens are redacted.
 
+For a slot that may already be empty, the authenticated filament-slot GET also
+returns `metadataCleared` and `metadataClearedAgeMs`. Regular AMS slots require
+explicit empty profile/material and empty/zero nozzle temperatures from one
+snapshot; optional `setting_id` must be empty if supplied. Missing core fields,
+malformed values, stale data and unsupported slots yield null. General status
+does not refresh the metadata observation's age, and partial slot updates replace
+the previous metadata conclusion rather than merging fields. Clients may skip a
+reset only when independent fresh observations establish both filament absence
+and cleared metadata. The read does not establish verified write success, and a
+rejected DELETE remains a rejection.
+
 Do not blindly retry explicit rejection or verification failure: metadata may
 already have changed in other failure cases. Compare a recent successful command
 with the rejected one (target, requested profile, printer state and reply).

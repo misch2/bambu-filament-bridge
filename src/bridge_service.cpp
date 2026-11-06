@@ -59,6 +59,41 @@ const json* target_slot(const json& print, int ams_id, int tray_id) {
   }
   return nullptr;
 }
+// Unlike post-write verification, a no-op observation has no accepted reset
+// command as evidence. Require explicit core metadata from one slot snapshot.
+// setting_id alone is optional because stock telemetry can omit it.
+json metadata_cleared(const json& slot) {
+  bool unknown = false;
+  bool populated = false;
+  for (const auto* field : {"tray_info_idx", "tray_type", "setting_id",
+                            "nozzle_temp_min", "nozzle_temp_max"}) {
+    const auto value = slot.find(field);
+    if (value == slot.end()) {
+      if (std::string(field) != "setting_id") unknown = true;
+      continue;
+    }
+    const bool temperature = std::string(field).find("nozzle_temp_") == 0;
+    if (value->is_string()) {
+      const auto& raw = value->get_ref<const std::string&>();
+      if (temperature && !raw.empty()) {
+        unsigned int parsed_value = 0;
+        const auto parsed = std::from_chars(raw.data(), raw.data() + raw.size(), parsed_value);
+        if (parsed.ec != std::errc{} || parsed.ptr != raw.data() + raw.size() || parsed_value > 400)
+          unknown = true;
+        else if (parsed_value != 0)
+          populated = true;
+      } else if (!raw.empty()) {
+        populated = true;
+      }
+    } else if (temperature && value->is_number()) {
+      if (*value < 0 || *value > 400) unknown = true;
+      else if (*value != 0) populated = true;
+    } else {
+      unknown = true;
+    }
+  }
+  return unknown ? json(nullptr) : json(!populated);
+}
 }  // namespace
 BridgeService::BridgeService(Backend& backend, Timing timing,
                              std::vector<std::string> diagnostic_secrets)
@@ -112,7 +147,7 @@ nlohmann::json BridgeService::slot_state(int ams, int tray) const {
   json result{{"amsId", ams}, {"trayId", tray}};
   const auto now = Clock::now();
   const auto prefix = std::to_string(ams) + "/" + std::to_string(tray) + "/";
-  for (const auto* field : {"present", "reading", "trayUuid", "gcodeState"}) {
+  for (const auto* field : {"present", "reading", "trayUuid", "gcodeState", "metadataCleared"}) {
     auto found = observations_.find(std::string(field) == "gcodeState" ? field : prefix + field);
     const auto age =
         found == observations_.end()
@@ -221,6 +256,7 @@ void BridgeService::on_message(const std::string& message) {
             }
           }
           if (const auto* slot = target_slot(print, ams, tray)) {
+            observations_[prefix + "metadataCleared"] = {metadata_cleared(*slot), received};
             auto uuid = slot->find("tray_uuid");
             if (uuid != slot->end() && uuid->is_string())
               observations_[prefix + "trayUuid"] = {
