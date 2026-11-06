@@ -65,8 +65,8 @@ const json* target_slot(const json& print, int ams_id, int tray_id) {
 json metadata_cleared(const json& slot) {
   bool unknown = false;
   bool populated = false;
-  for (const auto* field : {"tray_info_idx", "tray_type", "setting_id",
-                            "nozzle_temp_min", "nozzle_temp_max"}) {
+  for (const auto* field :
+       {"tray_info_idx", "tray_type", "setting_id", "nozzle_temp_min", "nozzle_temp_max"}) {
     const auto value = slot.find(field);
     if (value == slot.end()) {
       if (std::string(field) != "setting_id") unknown = true;
@@ -86,8 +86,10 @@ json metadata_cleared(const json& slot) {
         populated = true;
       }
     } else if (temperature && value->is_number()) {
-      if (*value < 0 || *value > 400) unknown = true;
-      else if (*value != 0) populated = true;
+      if (*value < 0 || *value > 400)
+        unknown = true;
+      else if (*value != 0)
+        populated = true;
     } else {
       unknown = true;
     }

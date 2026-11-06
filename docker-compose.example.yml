@@ -1,6 +1,6 @@
 services:
   bridge:
-    image: ghcr.io/misch2/bambu-filament-bridge:0.1.9
+    image: ghcr.io/misch2/bambu-filament-bridge:0.2.1
     build: .
     restart: unless-stopped
     environment:

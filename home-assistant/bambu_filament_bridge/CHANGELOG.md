@@ -1,5 +1,11 @@
 # Unreleased
 
+# 0.2.1
+
+- Expose fresh cleared-metadata observations so clients can identify already-empty slots; preserve command-reply and fresh-status verification for writes.
+- Improve recovery after failed filament assignments and expose fresh slot observations with bounded publish diagnostics.
+- Update the pinned open-bamboo-networking dependency and align service, image and Home Assistant release versions.
+
 # 0.1.9
 
 - Add bounded SET/CLEAR failure diagnostics, including command and target IDs, printer replies and last known printer state.

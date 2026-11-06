@@ -354,12 +354,15 @@ void slot_observations() {
       R"({"print":{"command":"push_status","ams":{"tray_exist_bits":"not hex","tray_reading_bits":{}} ,"gcode_state":"IDLE"}})");
   CHECK(f.service.slot_state(0, 3)["present"] == true);
   auto observe_metadata = [&](json slot, int ams = 0) {
-    f.fake.callbacks.message(json{{"print", {{"command", "push_status"},
-        {"ams", {{"ams", json::array({{{"id", std::to_string(ams)},
-                                      {"tray", json::array({slot})}}})}}}}}}.dump());
+    f.fake.callbacks.message(json{{"print",
+                                   {{"command", "push_status"},
+                                    {"ams",
+                                     {{"ams", json::array({{{"id", std::to_string(ams)},
+                                                            {"tray", json::array({slot})}}})}}}}}}
+                                 .dump());
     return f.service.slot_state(ams, 3);
   };
-  const json empty{{"id", "3"}, {"tray_info_idx", ""}, {"tray_type", ""},
+  const json empty{{"id", "3"},        {"tray_info_idx", ""},  {"tray_type", ""},
                    {"setting_id", ""}, {"nozzle_temp_min", 0}, {"nozzle_temp_max", "0"}};
   CHECK(observe_metadata(empty)["metadataCleared"] == true);
   auto no_setting = empty;
@@ -372,7 +375,8 @@ void slot_observations() {
     CHECK(observe_metadata(partial)["metadataCleared"].is_null());
   }
   CHECK(observe_metadata({{"id", "3"}})["metadataCleared"].is_null());
-  for (auto field : {"tray_info_idx", "tray_type", "setting_id", "nozzle_temp_min", "nozzle_temp_max"}) {
+  for (auto field :
+       {"tray_info_idx", "tray_type", "setting_id", "nozzle_temp_min", "nozzle_temp_max"}) {
     auto populated = empty;
     populated[field] = std::string(field).find("nozzle_temp_") == 0 ? json(200) : json("PLA");
     CHECK(observe_metadata(populated)["metadataCleared"] == false);
